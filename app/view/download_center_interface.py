@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
-from PyQt5.QtCore import QPoint, Qt, QSize, QThread, pyqtSignal
+from PyQt5.QtCore import QPoint, Qt, QSize, pyqtSignal
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (
     QAbstractItemView,
@@ -54,33 +54,6 @@ from app.config import APP_DATA_PATH
 from app.core.entities import TranscribeModelEnum
 from app.core.utils.desktop_notification import send_desktop_notification
 from app.core.utils.platform_utils import open_path
-
-
-class FfmpegHevcFallbackThread(QThread):
-    progress = pyqtSignal(int, str)
-    completed = pyqtSignal(str, str)
-    error = pyqtSignal(str)
-
-    def __init__(self, source_path: str, target_path: str, parent=None):
-        super().__init__(parent)
-        self.source_path = source_path
-        self.target_path = target_path
-        self.encoder_preference = cfg.get(cfg.download_hevc_encoder)
-
-    def run(self):
-        try:
-            from app.core.utils.video_utils import transcode_video_to_hevc
-
-            encoder = transcode_video_to_hevc(
-                self.source_path,
-                self.target_path,
-                progress_callback=self.progress.emit,
-                transcode_audio_to_aac=True,
-                encoder_preference=self.encoder_preference,
-            )
-            self.completed.emit(self.target_path, encoder)
-        except Exception as exc:
-            self.error.emit(str(exc))
 
 
 class AspectRatioLabel(QLabel):
@@ -225,7 +198,6 @@ class DownloadCenterInterface(QWidget):
         super().__init__(parent)
         self.preview_thread = None
         self.download_thread = None
-        self.ffmpeg_fallback_thread = None
         self.auto_hotword_extraction_thread = None
         self.auto_hotword_extraction_target = None
         self.preview_data = None
@@ -399,9 +371,6 @@ class DownloadCenterInterface(QWidget):
         self.command_bar.addAction(self.open_folder_action)
         self.send_to_transcription_action = Action(FIF.SEND, self.tr("送去转录"), triggered=self.send_download_to_transcription)
         self.command_bar.addAction(self.send_to_transcription_action)
-        self.ffmpeg_fallback_action = Action(FIF.SYNC, self.tr("FFmpeg重试H.265"), triggered=self.retry_hevc_with_ffmpeg)
-        self.ffmpeg_fallback_action.setVisible(False)
-        self.command_bar.addAction(self.ffmpeg_fallback_action)
         top_layout.addWidget(self.command_bar, 1)
 
         self.terminate_button = PushButton(self.tr("终止下载"), self, icon=FIF.CANCEL)
@@ -1352,14 +1321,6 @@ class DownloadCenterInterface(QWidget):
     def _set_result_actions_enabled(self, enabled: bool, has_video: bool = False):
         self.open_folder_action.setEnabled(enabled)
         self.send_to_transcription_action.setEnabled(enabled and has_video)
-        fallback_available = bool(
-            enabled
-            and self.last_result.get("postprocess_failed")
-            and self.last_result.get("postprocess_fallback_source_path")
-            and self.last_result.get("postprocess_fallback_target_path")
-        )
-        self.ffmpeg_fallback_action.setVisible(fallback_available)
-        self.ffmpeg_fallback_action.setEnabled(fallback_available and not getattr(self, "ffmpeg_fallback_thread", None))
 
     def _toggle_download_detail_panel(self):
         visible = not self.download_detail_panel.isVisible()
@@ -1451,8 +1412,6 @@ class DownloadCenterInterface(QWidget):
         self.result_transcript_txt.setText(self.tr("视频文稿：暂无"))
         self.result_terms_txt.setText(self.tr("AI术语表：请在 WhisperX 热词管理中手动生成"))
         self.result_transcoded.setText(self.tr("H.265后处理：暂无"))
-        self.ffmpeg_fallback_action.setVisible(False)
-        self.ffmpeg_fallback_action.setEnabled(False)
 
     def _set_terms_result_text(self, message: str):
         if hasattr(self, "result_terms_txt"):
@@ -2713,7 +2672,6 @@ class DownloadCenterInterface(QWidget):
         self._pending_work_dir = work_dir
         self._last_persisted_progress = -1
         self.last_result = {}
-        self.ffmpeg_fallback_thread = None
         self._reset_result_labels()
         self._reset_download_detail_panel()
         self._set_result_actions_enabled(False)
@@ -2833,7 +2791,6 @@ class DownloadCenterInterface(QWidget):
 
     def on_download_cancelled(self, message: str):
         self.last_result = {}
-        self.ffmpeg_fallback_thread = None
         self._reset_result_labels()
         self.result_card.setVisible(False)
         self._adjust_responsive_layout()
@@ -2883,60 +2840,3 @@ class DownloadCenterInterface(QWidget):
             return
         self.send_to_transcription.emit(video_path)
         InfoBar.success(self.tr("已发送"), self.tr("已将视频发送到语音转录页面。"), duration=2500, parent=self)
-
-    def retry_hevc_with_ffmpeg(self):
-        if getattr(self, "ffmpeg_fallback_thread", None):
-            InfoBar.warning(self.tr("提示"), self.tr("FFmpeg H.265 重试正在进行中。"), duration=3000, parent=self)
-            return
-
-        source_path = self.last_result.get("postprocess_fallback_source_path")
-        target_path = self.last_result.get("postprocess_fallback_target_path")
-        if not source_path or not target_path:
-            InfoBar.warning(self.tr("提示"), self.tr("当前没有可回退重试的视频。"), duration=3000, parent=self)
-            self._set_result_actions_enabled(bool(self.last_result), bool(self.last_result.get("video_path")))
-            return
-
-        self.ffmpeg_fallback_thread = FfmpegHevcFallbackThread(source_path, target_path, self)
-        self.ffmpeg_fallback_thread.progress.connect(self.on_ffmpeg_fallback_progress)
-        self.ffmpeg_fallback_thread.completed.connect(self.on_ffmpeg_fallback_finished)
-        self.ffmpeg_fallback_thread.error.connect(self.on_ffmpeg_fallback_error)
-        self.ffmpeg_fallback_thread.start()
-        self.ffmpeg_fallback_action.setEnabled(False)
-        self.status_label.setText(self.tr("正在使用 FFmpeg 重试 H.265 转码…"))
-        self.result_transcoded.setText(self.tr("H.265后处理：正在使用 FFmpeg 重试…"))
-
-    def on_ffmpeg_fallback_progress(self, value: int, status: str):
-        self.progress_bar.setValue(value)
-        self.status_label.setText(status)
-
-    def on_ffmpeg_fallback_finished(self, transcoded_path: str, encoder: str):
-        self.ffmpeg_fallback_thread = None
-        self.last_result["transcoded_video_path"] = transcoded_path
-        self.last_result["transcoded_video_codec"] = encoder
-        self.last_result["video_path"] = transcoded_path
-        self.last_result["media_path"] = transcoded_path
-        self.last_result["postprocess_failed"] = False
-        self.last_result["postprocess_message"] = f"已使用 FFmpeg 转码为 H.265（{encoder}）"
-        self.last_result["postprocess_fallback_source_path"] = None
-        self.last_result["postprocess_fallback_target_path"] = None
-        self.result_video.setText(self.tr("视频：") + str(self.last_result.get("original_video_path") or transcoded_path))
-        self.result_media.setText(self.tr("主媒体：") + transcoded_path)
-        self.result_transcoded.setText(
-            self.tr("H.265后处理：")
-            + transcoded_path
-            + self.tr("（编码器：")
-            + str(encoder)
-            + "）"
-        )
-        self.progress_bar.setValue(100)
-        self.status_label.setText(self.tr("FFmpeg H.265 重试完成"))
-        self._set_result_actions_enabled(True, has_video=True)
-        InfoBar.success(self.tr("转码完成"), self.tr("已使用 FFmpeg 完成 H.265 重试。"), duration=3000, parent=self)
-
-    def on_ffmpeg_fallback_error(self, error: str):
-        self.ffmpeg_fallback_thread = None
-        self.last_result["postprocess_failed"] = True
-        self.result_transcoded.setText(self.tr("H.265后处理：FFmpeg 重试失败：") + str(error))
-        self.status_label.setText(self.tr("FFmpeg H.265 重试失败"))
-        self._set_result_actions_enabled(bool(self.last_result), bool(self.last_result.get("video_path")))
-        InfoBar.error(self.tr("转码失败"), error, duration=5000, parent=self)

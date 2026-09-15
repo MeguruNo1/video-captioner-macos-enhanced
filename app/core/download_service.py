@@ -1870,7 +1870,7 @@ class VideoDownloadService:
             )
         except Exception as exc:
             logger.exception("FFmpeg H.265 后处理失败: %s", exc)
-            message = f"FFmpeg H.265 后处理失败，可手动重试: {exc}"
+            message = f"FFmpeg H.265 后处理失败: {exc}"
             if native_error is not None:
                 message = (
                     f"macOS 原生 H.265 后处理失败，FFmpeg 重试也失败: "
