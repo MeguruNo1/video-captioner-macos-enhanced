@@ -1,78 +1,91 @@
 <div align="center">
 
-# VideoCaptioner macOS Fork
+# VideoCaptioner
+
+Local transcription, subtitle editing and translation · Windows / macOS
 
 **Language:** [简体中文](./README.md) | English
 
 </div>
 
-This is a macOS/Apple Silicon local-workflow fork of [WEIFENG2333/VideoCaptioner](https://github.com/WEIFENG2333/VideoCaptioner). It is not a full replacement for the upstream project. It keeps the desktop subtitle-processing experience and makes larger scoped changes around local macOS transcription, downloads, subtitle splitting, and translation reliability.
+An enhanced fork of [WEIFENG2333/VideoCaptioner](https://github.com/WEIFENG2333/VideoCaptioner) for video downloading, local transcription, subtitle proofreading and translation. Use the desktop interface or automate a single-video workflow through Codex MCP + Skill.
 
-This README focuses on the differences from upstream. For the full project overview, online documentation, CLI usage, and official releases, refer to the [upstream repository](https://github.com/WEIFENG2333/VideoCaptioner).
+## Distribution Plan and Status
 
-## Main Differences From Upstream
+**Windows EXE distribution is planned; macOS users build the app themselves.**
 
-| Area | Upstream | This fork |
+| Platform | Distribution | Current status |
 | --- | --- | --- |
-| Project shape | Cross-platform CLI + GUI + PyPI package + documentation site | macOS / Windows source-checkout GUI branch |
-| Supported platforms | Windows, macOS, and Linux | macOS; Windows desktop source support restored, native validation pending |
-| Local ASR | Multiple backends: `faster-whisper`, `whisper-api`, Bijian, Jianying, `whisper-cpp`, and others | Focused on WhisperX CUDA / CPU, with MLX Whisper added as an Apple Silicon GPU backend |
-| Timestamp strategy | Depends on each ASR backend's capabilities | Built around word-level timestamps, VAD, and WhisperX alignment |
-| Download flow | General upstream download command and desktop entry points | Dedicated download center with stronger yt-dlp handling, browser cookies, final MP4 normalization, and HEVC fallback |
-| Subtitle processing | General upstream subtitle splitting, optimization, translation, and synthesis | Stricter splitting, short-gap handling, repeated ASR cleanup, terminology/hotword handoff, and more defensive LLM translation |
-| Runtime model | `pip install videocaptioner`, `uv run videocaptioner`, and both CLI/GUI entry points | Source checkout, `.venv`, and a local `.app` launcher |
-| Packaging and docs | Upstream PyPI, CI, VitePress documentation, and multi-platform build scripts | Upstream release pipeline is removed or de-emphasized in favor of smaller macOS local-run docs |
+| Windows | A packaged EXE is planned | Desktop source entry point restored; EXE packaging and native Windows acceptance testing remain incomplete. Use the source setup below for now. |
+| macOS (Apple Silicon) | Install dependencies and build locally | Source setup, a local App launcher, and standalone App / DMG build scripts are available. |
 
-## What This Fork Focuses On
+Future Windows EXE downloads will appear on this repository's [Releases page](https://github.com/MeguruNo1/video-captioner-macos-enhanced/releases). Dependencies and installation steps will be documented with that release. Historical macOS DMGs are no longer the primary installation path going forward.
 
-- Local subtitle workflows on Apple Silicon Macs.
-- WhisperX CUDA / CPU transcription with automatic device/precision selection and WhisperX alignment.
-- Optional MLX Whisper backend through `mlx-whisper` for Apple Silicon GPU use.
-- App data stored under `~/Library/Application Support/VideoCaptioner`.
-- Work files stored under `~/Movies/VideoCaptioner` by default.
-- A local `.app` launcher that runs `.venv/bin/python main.py` from this checkout.
+This README documents this fork. The package of the same name on PyPI belongs to upstream and does not install these enhancements.
 
-## Out of Scope Here
+## Features
 
-- The PyPI package and `videocaptioner` CLI are no longer the main entry points.
-- The full upstream documentation site, release workflows, and multi-platform packaging pipeline are not maintained here.
-- This fork does not try to cover every upstream ASR, TTS, CLI, or cross-platform feature.
+- **Video downloads:** Dedicated download center, browser cookies, pause/resume, MP4 normalization and HEVC conversion.
+- **Local transcription:** MLX Whisper on Apple Silicon; WhisperX on CUDA / CPU with hardware-based device and precision selection.
+- **Subtitle processing:** Word timestamps, alignment, semantic segmentation, repeated-segment cleanup, terminology/hotwords, editing and export.
+- **Translation:** The desktop app uses your configured translation service; the Codex workflow proofreads and translates in the current conversation.
+- **Automation:** Local MCP + Skill delivers video, subtitles, transcripts, descriptions and covers, with resumable jobs and partial re-transcription.
 
-## Download a Release
+## macOS: Build It Yourself
 
-This fork publishes Apple Silicon macOS builds as `.dmg` installers:
+The current build scripts target **Apple Silicon (arm64)**. Install Homebrew and Xcode Command Line Tools (which provide the `clang` compiler), then follow these steps.
 
-```text
-https://github.com/MeguruNo1/video-captioner-macos-enhanced/releases
-```
-
-Current version: `macos-enhanced-v0.1.2`
-
-This release adds the local Codex subtitle workflow, forced alignment for MLX Whisper word timestamps, customizable download-description templates, browser-cookie refresh at startup, safer subtitle splitting around title abbreviations, and separate pause/terminate controls for resumable downloads.
-
-Install steps:
-
-1. Download the latest `VideoCaptioner-macos-enhanced-*.dmg`.
-2. Open the DMG and drag `VideoCaptioner.app` into `Applications`.
-3. If macOS blocks the first launch, right-click `VideoCaptioner.app` and choose `Open`.
-
-The release app bundles the Python application runtime and Python dependencies, but it does not bundle FFmpeg, WhisperX/MLX Whisper models, or user settings. Install FFmpeg before processing media:
+### 1. Install Dependencies and Run
 
 ```bash
-brew install ffmpeg
+xcode-select --install
+brew install python@3.12 ffmpeg git
+
+git clone https://github.com/MeguruNo1/video-captioner-macos-enhanced.git
+cd video-captioner-macos-enhanced
+
+python3.12 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip setuptools wheel
+.venv/bin/python -m pip install -r requirements-macos-whisperx.txt
+.venv/bin/python main.py
 ```
 
-WhisperX and MLX Whisper models download on first use, or are loaded from the existing local model directory:
+- `xcode-select --install` opens the developer tools installer. Skip it if already installed; complete installation before continuing.
+- `brew install` installs Python 3.12, FFmpeg and Git. FFmpeg provides the `ffmpeg` and `ffprobe` media tools.
+- `git clone` downloads the source; `cd` (change directory) enters the project root, where subsequent commands run.
+- `-m` (module) runs `venv` to create the `.venv` virtual environment or `pip` to install dependencies. `.venv/bin/python` is its interpreter; activation is unnecessary.
+- `--upgrade` updates packaging tools; `-r` (requirements) reads the macOS dependency file. The last command starts the desktop app.
 
-```text
-~/Library/Application Support/VideoCaptioner/models
+### 2. Build the App Launcher
+
+After confirming that the source app starts successfully, run:
+
+```bash
+scripts/build_macos_app.sh --install
 ```
 
-## Windows Source Setup
+`--install` copies the launcher to `/Applications/VideoCaptioner.app`, replacing any existing app there. The build output is `dist/VideoCaptioner.app` inside the project.
 
-The desktop entry point now supports Windows with WhisperX CUDA / CPU transcription with automatic device and precision selection, downloads, subtitle editing, and translation. See the official [WhisperX CPU instructions](https://github.com/m-bain/whisperX). Regression tests were run on macOS; installation, transcription, and UI acceptance on native Windows remain unverified. No Windows EXE installer is provided.
+This launcher runs `.venv/bin/python main.py` from the current checkout. Keep the source and `.venv` in place, and rebuild after moving the project. Source changes take effect when you restart the app.
 
-Install 64-bit Python 3.12, Git, and FFmpeg first. Ensure both `ffmpeg` and `ffprobe` are on the system `PATH`, then run in PowerShell:
+### 3. Optional: Build a Standalone App / DMG
+
+To bundle the Python runtime and Python dependencies, run from the same project root:
+
+```bash
+scripts/build_macos_release.sh
+```
+
+The script uses PyInstaller, included in the dependencies, and produces:
+
+- `dist/pyinstaller/VideoCaptioner.app`: Standalone application.
+- `dist/release/`: DMG image and SHA-256 checksum file.
+
+The filename version comes from the script's `DEFAULT_VERSION`; it does not identify the latest published release. The bundle still requires system FFmpeg and does not include transcription models or user configuration. The script applies an ad-hoc signature; the app is not Apple-notarized.
+
+## Windows: Run From Source for Now
+
+Until the EXE is released, install **64-bit Python 3.12, Git and FFmpeg**, with `ffmpeg` and `ffprobe` on `PATH` (the executable search path). Run in PowerShell:
 
 ```powershell
 git clone https://github.com/MeguruNo1/video-captioner-macos-enhanced.git
@@ -83,78 +96,35 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe main.py
 ```
 
-`git clone` downloads the source; `cd` changes directory. `py -3.12` selects Python 3.12; `-m` runs a module; `venv` creates the `.venv` environment. Calling its Python directly avoids activation. `--upgrade` updates installation tools; `-r` reads the requirements file. The last command launches the app; subsequent launches can use `VideoCaptioner.bat`.
+`git clone` downloads the source; `cd` (change directory) enters it. `py -3.12` selects Python 3.12; `-m` (module) runs a module, and `venv` creates the virtual environment. `--upgrade` updates packaging tools; `-r` (requirements) reads the dependency file. `.\.venv\Scripts\python.exe` is the project's interpreter. Later, double-click `VideoCaptioner.bat` in the project to launch the app.
 
-- Data/models: `%LOCALAPPDATA%\VideoCaptioner`; output: `Videos\VideoCaptioner` under the user directory.
-- Cookie source defaults to Edge; Chrome and manual `cookies.txt` import are available. Browser encryption may prevent extraction.
-- Windows excludes MLX/PyObjC, uses FFmpeg and tray notifications, and supports `auto / cuda / cpu` transcription with automatic precision selection. Existing explicit CPU settings are retained; select auto or CUDA in settings to change them. See the [MCP guide](docs/codex-mcp.md) for GPU dependencies.
-- The `/videocaptioner` MCP workflow inspects hardware and selects MLX Metal, WhisperX CUDA or CPU. The macOS PO Token setup script does not run on Windows; configure a provider separately if needed and set `VIDEO_CAPTIONER_BGUTIL_SERVER_HOME` to its `server` directory.
+Windows uses WhisperX with `auto / cuda / cpu` device selection and automatic precision selection. CUDA requires compatible hardware, drivers and Python dependencies; see [hardware and Windows setup](docs/codex-mcp.md#cpu--gpu-检查与-windows). Windows dependencies exclude MLX and Apple frameworks.
 
-## Run From Source
+## First Use and Data Locations
 
-```bash
-brew install python@3.12 ffmpeg git
+### Models and Media Tools
 
-git clone https://github.com/MeguruNo1/video-captioner-macos-enhanced.git
-cd video-captioner-macos-enhanced
+Download or configure compatible local models before use, allowing time and disk space for downloads. WhisperX defaults to `large-v3-turbo`; MLX Whisper defaults to `mlx-community/whisper-large-v3-turbo`. The Codex workflow requires the transcription model to be cached first; see the [MCP guide](docs/codex-mcp.md).
 
-python3.12 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip setuptools wheel
-pip install -r requirements-macos-whisperx.txt
-python main.py
-```
+| Content | macOS | Windows |
+| --- | --- | --- |
+| App data | `~/Library/Application Support/VideoCaptioner` | `%LOCALAPPDATA%\VideoCaptioner` |
+| Models | `models` under app data | `models` under app data |
+| Default work output | `~/Movies/VideoCaptioner` | `Videos\VideoCaptioner` under the user directory |
 
-YouTube may require a subtitle-specific PO Token. After the first source setup,
-install the local token provider so yt-dlp can list affected automatic captions:
+`~` means the current user's home directory; `%LOCALAPPDATA%` is the Windows environment variable for local user app data.
+
+### YouTube Cookies and PO Tokens
+
+For downloads requiring authentication, select browser cookies in the app or import `cookies.txt`. Edge is the default source on Windows; browser encryption policies may prevent automatic extraction.
+
+Some YouTube automatic captions require a PO Token. macOS users can run this optional setup from the project root:
 
 ```bash
 scripts/setup_youtube_pot_provider.sh
 ```
 
-The script requires Node.js 20+, npm, and Git. It installs the provider under
-`~/Library/Application Support/VideoCaptioner/youtube-pot-provider` and does not
-run a persistent background service.
-
-WhisperX downloads transcription, VAD, and alignment models on first use unless compatible local models already exist under:
-
-```text
-~/Library/Application Support/VideoCaptioner/models
-```
-
-`large-v3-turbo` is the default local model for this branch. It should be kept under the app model directory as `faster-whisper-large-v3-turbo`.
-
-MLX Whisper uses `mlx-community/whisper-large-v3-turbo` by default. You can also use other Hugging Face MLX Whisper repos or a local MLX Whisper model directory converted with `mlx-examples/whisper`.
-
-## Install Local App Launcher
-
-The local app bundle is only a launcher for this source checkout and virtual environment. It does not bundle Python, dependencies, or models; edit the source tree and restart the app to run updated code.
-
-```bash
-scripts/build_macos_app.sh --install
-```
-
-## Build a Release Installer
-
-Release DMGs are built with PyInstaller and written to `dist/release/`:
-
-```bash
-VIDEO_CAPTIONER_VERSION=macos-enhanced-v0.1.2 scripts/build_macos_release.sh
-```
-
-The output app includes the Python runtime and Python dependencies, but still expects system FFmpeg and downloads ASR models on first use.
-
-## Supported Formats
-
-| Type | Formats |
-| --- | --- |
-| Video | MP4, MKV, MOV, AVI, WebM, WMV, FLV, TS, and more |
-| Audio | MP3, WAV, AAC, FLAC, OGG, OPUS, M4A, WMA, and more |
-| Subtitle | SRT, VTT, JSON, TXT |
-
-## Upstream and License
-
-The original project was created by [@WEIFENG2333](https://github.com/WEIFENG2333). This fork is based on that project and follows the original GPL-3.0 license terms. If you publish this fork, keep the original copyright and license information.
+It requires Node.js 20+, npm and Git, installs the provider under `~/Library/Application Support/VideoCaptioner/youtube-pot-provider`, and does not start a persistent background service. On Windows, configure the provider separately and set the `VIDEO_CAPTIONER_BGUTIL_SERVER_HOME` environment variable to its `server` directory; this macOS script cannot be run directly.
 
 ## Codex subtitle workflow
 
@@ -166,7 +136,7 @@ A local MCP server and Skill can download a video, transcribe with hardware-sele
 - **The Skill** is the [workflow instruction file](skills/videocaptioner/SKILL.md) shipped with this source tree. It guides hardware checks, proofreading, segmentation, translation, and delivery.
 - **Codex** processes subtitle text in the current conversation without a separate translation API. Audio stays local; subtitle text enters the conversation and normal Codex usage applies.
 
-This fork currently distributes MCP + Skill through a **source installation**. Installing the DMG or copying only `SKILL.md` does not register the MCP server. The upstream PyPI package does not contain this fork's integration.
+This fork currently distributes MCP + Skill through a **source installation**. Desktop packaging and MCP installation are separate steps; copying only `SKILL.md` does not register the MCP server. The upstream PyPI package does not contain this fork's integration.
 
 ### Install MCP and the Skill
 
@@ -208,15 +178,16 @@ You can also select the `/videocaptioner` Skill and provide a link. To pin a dev
 
 See the [MCP guide](docs/codex-mcp.md) for parameters, directories, timestamp validation, and recovery rules.
 
-### How upstream distributes the project
+## Supported Formats
 
-Checked on 2026-09-15; upstream and fork versions are independent.
-
-| Channel | Upstream distribution |
+| Type | Formats |
 | --- | --- |
-| Python package | [PyPI videocaptioner](https://pypi.org/project/videocaptioner/) supplies CLI and GUI through `pip install videocaptioner`, which installs the upstream Python package, not this fork. |
-| GitHub Releases | [v1.4.2](https://github.com/WEIFENG2333/VideoCaptioner/releases/tag/v1.4.2) has `.whl` and `.tar.gz` Python packages. The verified [v1.3.3](https://github.com/WEIFENG2333/VideoCaptioner/releases/tag/v1.3.3) Windows installer is `VideoCaptioner-Setup-win64-v1.3.3.exe`; it is a different version. |
-| macOS / source | The [upstream README](https://github.com/WEIFENG2333/VideoCaptioner#readme) documents source development and a [run.sh installer/launcher](https://github.com/WEIFENG2333/VideoCaptioner/blob/master/scripts/run.sh). |
-| Skill | The [upstream Markdown Skill](https://github.com/WEIFENG2333/VideoCaptioner/blob/master/skills/SKILL.md) is copied to Claude Code's `~/.claude/skills/videocaptioner/` (`~` means home directory). It guides CLI calls; this fork instead supplies a Codex MCP workflow. |
+| Video | MP4, MKV, MOV, AVI, WebM, WMV, FLV, TS and more |
+| Audio | MP3, WAV, AAC, FLAC, OGG, OPUS, M4A, WMA and more |
+| Subtitle | SRT, VTT, JSON, TXT |
 
-The shared download core incorporates production lessons documented by [FluentYTDL](https://github.com/SakuraForgot/FluentYTDL): yt-dlp's default YouTube client strategy, concurrent fragments with the full retry budget, staged authentication recovery, cleanup of stale partial state after 403 responses, and atomic cookie replacement only after candidate validation. Download Center, preview parsing, MCP, and compatibility threads all use these rules.
+## Credits and License
+
+The original project was created by [@WEIFENG2333](https://github.com/WEIFENG2333). This fork follows upstream's GPL-3.0 license terms. Preserve the original copyright and license information when redistributing.
+
+The download core draws on [FluentYTDL](https://github.com/SakuraForgot/FluentYTDL) practices for retries, authentication recovery and cookie validation.
