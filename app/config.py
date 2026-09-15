@@ -3,7 +3,7 @@ import os
 import sys
 from pathlib import Path
 
-from app.core.utils.platform_utils import app_data_dir, default_work_dir
+from app.core.utils.platform_utils import app_data_dir, default_work_dir, bundled_bin_dir
 
 YEAR = 2025
 APP_NAME = "VideoCaptioner"
@@ -23,7 +23,7 @@ APP_DATA_PATH = app_data_dir(APP_NAME)
 WORK_PATH = default_work_dir(APP_NAME)
 
 
-BIN_PATH = RESOURCE_PATH / "bin" / "macos-arm64"
+BIN_PATH = RESOURCE_PATH / "bin" / bundled_bin_dir()
 ASSETS_PATH = RESOURCE_PATH / "assets"
 
 LOG_PATH = APP_DATA_PATH / "logs"

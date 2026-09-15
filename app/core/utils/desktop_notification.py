@@ -3,6 +3,8 @@ from __future__ import annotations
 from threading import Event
 import uuid
 
+from app.core.utils.platform_utils import IS_MACOS
+
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QApplication, QSystemTrayIcon
 
@@ -37,6 +39,8 @@ def _on_message_clicked():
 
 def _ensure_mac_notification_center():
     global _mac_notification_center, _mac_notification_delegate
+    if not IS_MACOS:
+        return None
     if _mac_notification_center is not None:
         return _mac_notification_center
 
@@ -127,6 +131,8 @@ def _request_mac_notification_authorization(center, wait: bool = False) -> bool 
 
 
 def request_desktop_notification_authorization() -> bool:
+    if not IS_MACOS:
+        return QSystemTrayIcon.isSystemTrayAvailable() and QSystemTrayIcon.supportsMessages()
     center = _ensure_mac_notification_center()
     if center is None:
         return False
@@ -137,6 +143,12 @@ def get_desktop_notification_status() -> dict:
     if not bool(cfg.get(cfg.desktop_notifications_enabled)):
         return {"status": "disabled", "message": "应用内通知开关已关闭"}
 
+    if not IS_MACOS:
+        available = request_desktop_notification_authorization()
+        return {
+            "status": "authorized" if available else "unavailable",
+            "message": "使用系统托盘通知" if available else "系统托盘通知不可用",
+        }
     center = _ensure_mac_notification_center()
     if center is None:
         return {"status": "unavailable", "message": "macOS 原生通知不可用"}

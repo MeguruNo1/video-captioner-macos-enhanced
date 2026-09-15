@@ -1,6 +1,12 @@
 # coding:utf-8
 from enum import Enum
 
+from app.core.utils.platform_utils import (
+    MLX_SUPPORTED,
+    COOKIE_BROWSER_OPTIONS,
+    DEFAULT_COOKIE_BROWSER_LABEL,
+)
+
 from PyQt5.QtCore import QLocale
 from PyQt5.QtGui import QColor
 from qfluentwidgets import (
@@ -30,7 +36,11 @@ from ..core.utils.mlx_model_utils import DEFAULT_MLX_MODEL, preferred_mlx_model
 
 
 TRANSCRIBE_MODEL_OPTIONS = (
-    [TranscribeModelEnum.WHISPER_X, TranscribeModelEnum.MLX_WHISPER]
+    (
+        [TranscribeModelEnum.WHISPER_X, TranscribeModelEnum.MLX_WHISPER]
+        if MLX_SUPPORTED
+        else [TranscribeModelEnum.WHISPER_X]
+    )
     if WHISPERX_ONLY_MODE
     else list(TranscribeModelEnum)
 )
@@ -457,8 +467,8 @@ class Config(QConfig):
     download_cookie_browser = OptionsConfigItem(
         "Download",
         "CookieBrowser",
-        "Safari",
-        OptionsValidator(["Safari", "Chrome", "Edge"]),
+        DEFAULT_COOKIE_BROWSER_LABEL,
+        OptionsValidator(COOKIE_BROWSER_OPTIONS),
     )
     download_center_mode = OptionsConfigItem(
         "Download",

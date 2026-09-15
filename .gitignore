@@ -12,6 +12,9 @@
 !/README-macos-whisperx.md
 !/main.py
 !/requirements-macos-whisperx.txt
+!/requirements-common.txt
+!/requirements-windows.txt
+!/VideoCaptioner.bat
 !/app/
 !/app/**
 !/tests/

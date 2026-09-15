@@ -14,8 +14,8 @@
 
 | 方向 | 原项目 | 本分支 |
 | --- | --- | --- |
-| 项目定位 | 跨平台 CLI + GUI + PyPI 包 + 文档站 | macOS 本地源码运行的 GUI 分支 |
-| 支持平台 | Windows、macOS、Linux | 仅支持 macOS，启动时会拒绝非 macOS 平台 |
+| 项目定位 | 跨平台 CLI + GUI + PyPI 包 + 文档站 | macOS / Windows 源码运行的 GUI 分支 |
+| 支持平台 | Windows、macOS、Linux | macOS；已恢复 Windows 桌面源码入口，待 Windows 实机验收 |
 | 本地 ASR | 多后端：`faster-whisper`、`whisper-api`、必剪、剪映、`whisper-cpp` 等 | 聚焦 WhisperX CPU，并新增 MLX Whisper 作为 Apple Silicon GPU 后端 |
 | 时间戳策略 | 根据不同 ASR 后端能力处理 | 默认围绕词级时间戳、VAD 和 WhisperX 对齐构建后续字幕流程 |
 | 下载流程 | 上游通用下载命令和桌面入口 | 独立下载中心，强化 yt-dlp、浏览器 Cookie、最终 MP4 归一化和 HEVC 兜底 |
@@ -67,6 +67,29 @@ WhisperX 和 MLX Whisper 模型会在首次使用时下载，或读取已有的�
 ```text
 ~/Library/Application Support/VideoCaptioner/models
 ```
+
+## Windows 源码运行
+
+已恢复 Windows 桌面入口，使用 WhisperX CPU（默认 `int8`）转写，保留下载、字幕编辑和翻译功能。WhisperX 官方提供 [CPU 运行方式](https://github.com/m-bain/whisperX)。本轮在 macOS 完成回归测试，尚未在 Windows 实机完成安装、转写及界面验收，也未提供 Windows EXE 安装包。
+
+先安装 Python 3.12（64 位）、Git 和 FFmpeg，并确认 `ffmpeg`、`ffprobe` 已加入系统 `PATH`（可执行程序搜索路径）。在 PowerShell 中执行：
+
+```powershell
+git clone https://github.com/MeguruNo1/video-captioner-macos-enhanced.git
+cd video-captioner-macos-enhanced
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip setuptools wheel
+.\.venv\Scripts\python.exe -m pip install -r requirements-windows.txt
+.\.venv\Scripts\python.exe main.py
+```
+
+`git clone` 下载源码；`cd`（change directory，切换目录）进入项目。`py -3.12` 选择 Python 3.12；`-m`（module，以模块运行）执行 `venv` 创建 `.venv` 虚拟环境。后续使用其 `Scripts\python.exe`，无需激活环境；`--upgrade` 升级安装工具，`-r`（requirements，依赖清单）读取 Windows 依赖文件。最后一行启动应用，后续也可双击项目内的 `VideoCaptioner.bat`。
+
+- 数据和模型：`%LOCALAPPDATA%\VideoCaptioner`（当前用户的本地应用数据目录）。
+- 默认输出：用户目录下的 `Videos\VideoCaptioner`。
+- Cookie 默认来源为 Edge，也可选择 Chrome 或手动导入 `cookies.txt`。浏览器自身的加密策略可能阻止自动提取。
+- Windows 不安装 MLX / PyObjC；转码走 FFmpeg，通知走系统托盘。当前转写沿用 CPU 模式，尚未恢复 CUDA 配置。
+- `/videocaptioner` MCP 流程仍仅面向 Apple Silicon。macOS 的 PO Token 安装脚本也不能直接在 Windows 执行；有此需求时需另行配置提供器，并通过 `VIDEO_CAPTIONER_BGUTIL_SERVER_HOME` 指向其 `server` 目录。
 
 ## 从源码运行
 

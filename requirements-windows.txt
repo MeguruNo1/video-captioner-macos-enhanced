@@ -1,0 +1,2 @@
+# Windows desktop: WhisperX CPU; no Apple frameworks or MLX.
+-r requirements-common.txt

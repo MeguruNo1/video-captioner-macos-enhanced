@@ -14,8 +14,8 @@ This README focuses on the differences from upstream. For the full project overv
 
 | Area | Upstream | This fork |
 | --- | --- | --- |
-| Project shape | Cross-platform CLI + GUI + PyPI package + documentation site | macOS source-checkout GUI branch |
-| Supported platforms | Windows, macOS, and Linux | macOS only; startup rejects non-macOS platforms |
+| Project shape | Cross-platform CLI + GUI + PyPI package + documentation site | macOS / Windows source-checkout GUI branch |
+| Supported platforms | Windows, macOS, and Linux | macOS; Windows desktop source support restored, native validation pending |
 | Local ASR | Multiple backends: `faster-whisper`, `whisper-api`, Bijian, Jianying, `whisper-cpp`, and others | Focused on WhisperX CPU, with MLX Whisper added as an Apple Silicon GPU backend |
 | Timestamp strategy | Depends on each ASR backend's capabilities | Built around word-level timestamps, VAD, and WhisperX alignment |
 | Download flow | General upstream download command and desktop entry points | Dedicated download center with stronger yt-dlp handling, browser cookies, final MP4 normalization, and HEVC fallback |
@@ -67,6 +67,28 @@ WhisperX and MLX Whisper models download on first use, or are loaded from the ex
 ```text
 ~/Library/Application Support/VideoCaptioner/models
 ```
+
+## Windows Source Setup
+
+The desktop entry point now supports Windows with WhisperX CPU transcription (`int8`), downloads, subtitle editing, and translation. See the official [WhisperX CPU instructions](https://github.com/m-bain/whisperX). Regression tests were run on macOS; installation, transcription, and UI acceptance on native Windows remain unverified. No Windows EXE installer is provided.
+
+Install 64-bit Python 3.12, Git, and FFmpeg first. Ensure both `ffmpeg` and `ffprobe` are on the system `PATH`, then run in PowerShell:
+
+```powershell
+git clone https://github.com/MeguruNo1/video-captioner-macos-enhanced.git
+cd video-captioner-macos-enhanced
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip setuptools wheel
+.\.venv\Scripts\python.exe -m pip install -r requirements-windows.txt
+.\.venv\Scripts\python.exe main.py
+```
+
+`git clone` downloads the source; `cd` changes directory. `py -3.12` selects Python 3.12; `-m` runs a module; `venv` creates the `.venv` environment. Calling its Python directly avoids activation. `--upgrade` updates installation tools; `-r` reads the requirements file. The last command launches the app; subsequent launches can use `VideoCaptioner.bat`.
+
+- Data/models: `%LOCALAPPDATA%\VideoCaptioner`; output: `Videos\VideoCaptioner` under the user directory.
+- Cookie source defaults to Edge; Chrome and manual `cookies.txt` import are available. Browser encryption may prevent extraction.
+- Windows excludes MLX/PyObjC, uses FFmpeg and tray notifications, and retains CPU transcription. CUDA settings have not been restored.
+- The `/videocaptioner` MCP workflow remains Apple Silicon only. The macOS PO Token setup script does not run on Windows; configure a provider separately if needed and set `VIDEO_CAPTIONER_BGUTIL_SERVER_HOME` to its `server` directory.
 
 ## Run From Source
 

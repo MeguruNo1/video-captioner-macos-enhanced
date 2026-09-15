@@ -9,9 +9,6 @@ from qfluentwidgets import FluentTranslator
 PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-if sys.platform != "darwin":
-    raise RuntimeError("This VideoCaptioner branch only supports macOS.")
-
 from app.common.config import cfg
 from app.config import RESOURCE_PATH
 from app.core.utils import logger

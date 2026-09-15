@@ -15,6 +15,7 @@ from qfluentwidgets import (
 )
 
 from app.common.config import cfg
+from app.core.utils.platform_utils import IS_MACOS, DEFAULT_COOKIE_BROWSER_LABEL
 from app.common.signal_bus import signalBus
 from app.config import ASSETS_PATH, GITHUB_REPO_URL
 from app.thread.browser_cookie_export_thread import BrowserCookieExportThread
@@ -78,7 +79,7 @@ class MainWindow(FluentWindow):
         if not bool(cfg.get(cfg.download_auto_extract_cookies_on_startup)):
             return False
 
-        browser = str(cfg.get(cfg.download_cookie_browser) or "Safari")
+        browser = str(cfg.get(cfg.download_cookie_browser) or DEFAULT_COOKIE_BROWSER_LABEL)
         thread = BrowserCookieExportThread(browser, self)
         thread.completed.connect(self._on_startup_cookie_export_completed)
         thread.finished.connect(self._release_startup_cookie_export_thread)
@@ -126,7 +127,7 @@ class MainWindow(FluentWindow):
         return QRect(0, 0 if self.isFullScreen() else 8, 75, size.height())
 
     def _macTrafficLightRowHeight(self) -> int:
-        if self.isFullScreen():
+        if not IS_MACOS or self.isFullScreen():
             return 0
         return MAC_TRAFFIC_LIGHT_ROW_HEIGHT
 
@@ -162,6 +163,8 @@ class MainWindow(FluentWindow):
             )
 
     def _installMacDragEventFilters(self):
+        if not IS_MACOS:
+            return
         widgets = [
             self.titleBar,
         ]
@@ -188,6 +191,8 @@ class MainWindow(FluentWindow):
 
     def _applyMacWindowChromeStyle(self):
         """Use Qt translucent chrome without covering the main content."""
+        if not IS_MACOS:
+            return
         if isDarkTheme():
             title_bar_style = (
                 "background: rgba(26, 27, 30, 0.84);"

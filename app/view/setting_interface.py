@@ -537,10 +537,9 @@ class SettingInterface(ScrollArea):
             FIF.GLOBE,
             self.tr("Cookie 来源浏览器"),
             self.tr(
-                "提取 cookies.txt 时只读取所选浏览器；Safari 首次提取需授予"
-                "完全磁盘访问权限"
+                "提取 cookies.txt 时只读取所选浏览器；请先在该浏览器登录目标网站"
             ),
-            texts=["Safari", "Chrome", "Edge"],
+            texts=cfg.download_cookie_browser.options,
             parent=self.downloadSettingGroup,
         )
         self.downloadCenterOutputDirCard = PushSettingCard(
@@ -1199,14 +1198,14 @@ class SettingInterface(ScrollArea):
         if sent:
             InfoBar.success(
                 self.tr("测试通知已发送"),
-                self.tr("如果没有看到通知，请检查 macOS 系统通知权限。"),
+                self.tr("如果没有看到通知，请检查系统通知权限。"),
                 duration=4000,
                 parent=self,
             )
         else:
             InfoBar.warning(
                 self.tr("通知未发送"),
-                self.tr("请检查 macOS 系统设置中的通知权限。"),
+                self.tr("请检查系统设置中的通知权限。"),
                 duration=5000,
                 parent=self,
             )

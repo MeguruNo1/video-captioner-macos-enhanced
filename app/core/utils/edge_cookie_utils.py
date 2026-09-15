@@ -9,6 +9,7 @@ from typing import Any, Iterable
 from yt_dlp.cookies import YoutubeDLCookieJar, extract_cookies_from_browser
 
 from app.config import APP_DATA_PATH
+from app.core.utils.platform_utils import DEFAULT_COOKIE_BROWSER_LABEL
 
 COOKIE_FILE_PATH = APP_DATA_PATH / "cookies.txt"
 COOKIE_BROWSER_LABELS = {
@@ -16,7 +17,7 @@ COOKIE_BROWSER_LABELS = {
     "chrome": "Chrome",
     "edge": "Edge",
 }
-DEFAULT_COOKIE_BROWSER = "safari"
+DEFAULT_COOKIE_BROWSER = DEFAULT_COOKIE_BROWSER_LABEL.lower()
 SAFARI_COOKIE_DATABASES = (
     Path("~/Library/Cookies/Cookies.binarycookies"),
     Path(
