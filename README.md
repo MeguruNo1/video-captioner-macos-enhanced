@@ -16,7 +16,7 @@
 | --- | --- | --- |
 | 项目定位 | 跨平台 CLI + GUI + PyPI 包 + 文档站 | macOS / Windows 源码运行的 GUI 分支 |
 | 支持平台 | Windows、macOS、Linux | macOS；已恢复 Windows 桌面源码入口，待 Windows 实机验收 |
-| 本地 ASR | 多后端：`faster-whisper`、`whisper-api`、必剪、剪映、`whisper-cpp` 等 | 聚焦 WhisperX CPU，并新增 MLX Whisper 作为 Apple Silicon GPU 后端 |
+| 本地 ASR | 多后端：`faster-whisper`、`whisper-api`、必剪、剪映、`whisper-cpp` 等 | 聚焦 WhisperX CUDA / CPU，并新增 MLX Whisper 作为 Apple Silicon GPU 后端 |
 | 时间戳策略 | 根据不同 ASR 后端能力处理 | 默认围绕词级时间戳、VAD 和 WhisperX 对齐构建后续字幕流程 |
 | 下载流程 | 上游通用下载命令和桌面入口 | 独立下载中心，强化 yt-dlp、浏览器 Cookie、最终 MP4 归一化和 HEVC 兜底 |
 | 字幕处理 | 上游通用字幕切分、优化、翻译和合成 | 增强严格断句、短间隙处理、重复 ASR 片段清理、术语/热词传递和 LLM 翻译稳定性 |
@@ -26,7 +26,7 @@
 ## 本分支重点
 
 - 面向 Apple Silicon Mac 的本地字幕工作流。
-- WhisperX CPU 转写，默认使用 `int8`，并支持 WhisperX 对齐。
+- WhisperX CUDA / CPU 转写，自动选择设备和适用精度，并支持 WhisperX 对齐。
 - 可选 MLX Whisper 后端，通过 `mlx-whisper` 使用 Apple Silicon GPU。
 - 应用数据存放在 `~/Library/Application Support/VideoCaptioner`。
 - 默认工作文件存放在 `~/Movies/VideoCaptioner`。
@@ -70,7 +70,7 @@ WhisperX 和 MLX Whisper 模型会在首次使用时下载，或读取已有的�
 
 ## Windows 源码运行
 
-已恢复 Windows 桌面入口，使用 WhisperX CPU（默认 `int8`）转写，保留下载、字幕编辑和翻译功能。WhisperX 官方提供 [CPU 运行方式](https://github.com/m-bain/whisperX)。本轮在 macOS 完成回归测试，尚未在 Windows 实机完成安装、转写及界面验收，也未提供 Windows EXE 安装包。
+已恢复 Windows 桌面入口，使用 WhisperX 自动选择 CUDA / CPU 及适用精度转写，保留下载、字幕编辑和翻译功能。WhisperX 官方提供 [CPU 运行方式](https://github.com/m-bain/whisperX)。本轮在 macOS 完成回归测试，尚未在 Windows 实机完成安装、转写及界面验收，也未提供 Windows EXE 安装包。
 
 先安装 Python 3.12（64 位）、Git 和 FFmpeg，并确认 `ffmpeg`、`ffprobe` 已加入系统 `PATH`（可执行程序搜索路径）。在 PowerShell 中执行：
 
@@ -88,8 +88,8 @@ py -3.12 -m venv .venv
 - 数据和模型：`%LOCALAPPDATA%\VideoCaptioner`（当前用户的本地应用数据目录）。
 - 默认输出：用户目录下的 `Videos\VideoCaptioner`。
 - Cookie 默认来源为 Edge，也可选择 Chrome 或手动导入 `cookies.txt`。浏览器自身的加密策略可能阻止自动提取。
-- Windows 不安装 MLX / PyObjC；转码走 FFmpeg，通知走系统托盘。当前转写沿用 CPU 模式，尚未恢复 CUDA 配置。
-- `/videocaptioner` MCP 流程仍仅面向 Apple Silicon。macOS 的 PO Token 安装脚本也不能直接在 Windows 执行；有此需求时需另行配置提供器，并通过 `VIDEO_CAPTIONER_BGUTIL_SERVER_HOME` 指向其 `server` 目录。
+- Windows 不安装 MLX / PyObjC；转码走 FFmpeg，通知走系统托盘。转写已恢复 `auto / cuda / cpu`；精度支持自动检测。已有 CPU 设置不被覆盖，可在设置中切换。CUDA 依赖和 MCP 安装见 [Codex MCP 指南](docs/codex-mcp.md#cpu--gpu-检查与-windows)。
+- `/videocaptioner` MCP 会检查硬件并选择 MLX Metal、WhisperX CUDA 或 CPU。macOS 的 PO Token 安装脚本也不能直接在 Windows 执行；有此需求时需另行配置提供器，并通过 `VIDEO_CAPTIONER_BGUTIL_SERVER_HOME` 指向其 `server` 目录。
 
 ## 从源码运行
 
@@ -157,6 +157,6 @@ VIDEO_CAPTIONER_VERSION=macos-enhanced-v0.1.2 scripts/build_macos_release.sh
 
 ## Codex 自动字幕工作流
 
-新增本地 MCP + Skill 接入：提供视频链接，由本地 MLX Whisper 转录、当前 Codex 校对断句与翻译；按视频名建立任务目录，输出最终视频、原文/中文字幕、原文文稿及模板简介。最高画质下载遇到 VP9/AV1 时自动转为 HEVC，无需电脑操控或独立翻译 API。支持任务恢复和局部重转录。安装与使用见 [Codex MCP 指南](docs/codex-mcp.md)。
+新增本地 MCP + Skill 接入：提供视频链接，由硬件适配的本地 MLX / WhisperX 转录、当前 Codex 校对断句与翻译；按视频名建立任务目录，输出最终视频、原文/中文字幕、原文文稿及模板简介。最高画质下载遇到 VP9/AV1 时自动转为 HEVC，无需电脑操控或独立翻译 API。支持任务恢复和局部重转录。安装与使用见 [Codex MCP 指南](docs/codex-mcp.md)。
 
 下载核心参考了 [FluentYTDL](https://github.com/SakuraForgot/FluentYTDL) 的生产经验：让 yt-dlp 使用其默认 YouTube 客户端策略、并行分片保持完整重试预算、认证失败分级恢复、403 过期断点清理，以及 Cookie 候选通过校验后再原子替换。这些规则由下载中心、预览解析、MCP 和兼容线程共同使用。

@@ -3,7 +3,6 @@ import importlib.util
 import json
 import os
 from pathlib import Path
-import platform
 import shutil
 import signal
 import subprocess
@@ -21,7 +20,7 @@ from .settings import read_shared_settings, workflow_settings_snapshot
 from .store import Store, DEFAULT_OUTPUT, atomic_json
 
 PROJECT = Path(__file__).resolve().parents[2]
-ACTIVE = {"starting", "downloading", "extracting", "waiting_for_mlx", "transcribing", "retranscribing"}
+ACTIVE = {"starting", "downloading", "extracting", "waiting_for_mlx", "waiting_for_asr", "transcribing", "retranscribing"}
 
 
 def read_settings():
@@ -44,23 +43,50 @@ def model_path(model):
         return None
 
 
-def check_environment(model=None):
-    model = model or read_settings().get("MLXWhisper", {}).get("Model") or "mlx-community/whisper-large-v3-turbo"
-    local = model_path(model)
-    packages = {name: importlib.util.find_spec(name) is not None
-                for name in ("mcp", "mlx_whisper", "yt_dlp", "huggingface_hub", "psutil")}
-    binaries = {name: shutil.which(name) for name in ("ffmpeg", "ffprobe", "node")}
-    valid_model = bool(local and all((local / name).is_file() for name in ("config.json", "weights.safetensors")))
+def check_environment(model=None, backend="auto", device="auto", compute_type="auto"):
+    from app.core.utils.acceleration import inspect_acceleration, select_asr
+    from app.core.utils.platform_utils import app_data_dir
+    hardware = inspect_acceleration()
     errors = []
-    if platform.system() != "Darwin" or platform.machine() != "arm64":
-        errors.append("Local MLX transcription requires Apple Silicon macOS")
+    selected = None
+    try:
+        selected = select_asr(backend, device, compute_type, hardware)
+    except ValueError as exc:
+        errors.append(str(exc))
+    names = ["mcp", "yt_dlp", "huggingface_hub", "psutil"]
+    if selected:
+        names += ["mlx_whisper"] if selected["backend"] == "mlx" else ["whisperx", "torch", "torchaudio", "ctranslate2"]
+    packages = {name: importlib.util.find_spec(name) is not None for name in names}
+    binaries = {name: shutil.which(name) for name in ("ffmpeg", "ffprobe", "node")}
+    local = None
+    if selected:
+        shared = workflow_settings_snapshot(read_settings())
+        model = model or shared[selected["backend"]]["model"]
+        if selected["backend"] == "mlx":
+            local = model_path(model)
+            required = ("config.json", "weights.safetensors")
+        else:
+            from app.core.entities import TranscribeConfig
+            from app.core.utils.transcription_model_utils import resolve_available_whisperx_model
+            local = resolve_available_whisperx_model(TranscribeConfig(
+                whisperx_model=model, whisperx_model_dir=str(app_data_dir("VideoCaptioner") / "models")))
+            if local is None:
+                repo = ("Systran/faster-whisper-" + model) if "/" not in model and "\\" not in model else model
+                if model == "large-v3-turbo":
+                    repo = "mobiuslabsgmbh/faster-whisper-large-v3-turbo"
+                local = model_path(repo)
+            required = ("config.json", "model.bin", "tokenizer.json")
+        if not local or not all((local / name).is_file() for name in required):
+            errors.append(f"{selected['backend']} model is not cached locally: {model}. Download it or specify a local model directory.")
+            local = None
     errors.extend(f"Missing Python package: {name}" for name, found in packages.items() if not found)
     errors.extend(f"Missing executable: {name}" for name in ("ffmpeg", "ffprobe") if not binaries[name])
-    if not valid_model:
-        errors.append(f"MLX model is not cached locally: {model}. Download it or specify a local model directory.")
-    return {"ready": not errors, "errors": errors, "python": sys.executable,
-            "packages": packages, "binaries": binaries, "model": model,
-            "local_model": str(local) if valid_model else None}
+    warnings = list(hardware.get("warnings", []))
+    if selected and selected["backend"] == "whisperx":
+        warnings.append("WhisperX VAD/alignment models may download on first transcription; readiness checks only the cached ASR model. CUDA model loading may still fail on missing cuDNN/cuBLAS or insufficient VRAM; no silent CPU retry.")
+    return {"ready": not errors, "errors": errors, "warnings": warnings, "python": sys.executable,
+            "hardware": hardware, "selection": selected, "packages": packages, "binaries": binaries,
+            "model": model, "local_model": str(local) if local else None}
 
 
 def owned_process(state):
@@ -89,7 +115,7 @@ class JobManager:
                       workflow_settings=state["options"].get("workflow_settings", {}),
                       thumbnail_path=state.get("thumbnail_path"),
                       generated_cover_path=state.get("generated_cover_path"),
-                      log_path=str(Path(state.get("flow_dir") or state["directory"]) / "worker.log"))
+                      log_path=state.get("worker_log_path") or str(Path(state.get("flow_dir") or state["directory"]) / "worker.log"))
         return result
 
     def get_job(self, job_id):
@@ -105,7 +131,8 @@ class JobManager:
         return [self.get_job(p.stem) for p in files[:limit]]
 
     def start_job(self, url, source_language="en", target_language="zh-CN", output_dir=None,
-                  model=None, format_selector="", proxy_url=None, cookie_file=None, initial_prompt=""):
+                  model=None, format_selector="", proxy_url=None, cookie_file=None, initial_prompt="",
+                  backend="auto", device="auto", compute_type="auto"):
         parsed = urlparse(url)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
             raise ValueError("Provide a single HTTP(S) video URL without embedded credentials")
@@ -115,13 +142,16 @@ class JobManager:
             raise ValueError("Language cannot be empty; use auto for source detection")
         if cookie_file and not Path(cookie_file).expanduser().is_file():
             raise ValueError("Cookie file does not exist")
-        environment = check_environment(model)
+        environment = check_environment(model, backend, device, compute_type)
         if not environment["ready"]:
             raise ValueError("; ".join(environment["errors"]))
         settings = read_settings()
         download = settings.get("Download", {})
         shared = workflow_settings_snapshot(settings)
         shared["subtitle"]["target_language_code"] = target_language
+        selection = environment["selection"]
+        asr_settings = shared[selection["backend"]]
+        shared["asr"] = dict(selection, model=environment["local_model"])
         if proxy_url is None:
             from app.core.utils.proxy_utils import get_effective_download_proxy_url
             proxy_url = get_effective_download_proxy_url(download.get("ProxyMode", "自动检测"), download.get("ProxyURL", ""))
@@ -136,14 +166,19 @@ class JobManager:
                  "cover_required": True,
                  "options": {"url": url, "source_language": source_language, "target_language": target_language,
                              "model": environment["local_model"], "format_selector": format_selector,
+                             "backend": selection["backend"], "device": selection["device"],
+                             "compute_type": selection["compute_type"],
+                             "batch_size": shared["whisperx"]["batch_size"],
+                             "vad_method": shared["whisperx"]["vad_method"],
+                             "local_silero_dir": shared["whisperx"]["local_silero_dir"],
                              "proxy_url": proxy_url, "cookie_file": str(Path(cookie_file).expanduser().resolve()) if cookie_file else None,
-                             "initial_prompt": initial_prompt or shared["mlx"]["initial_prompt"],
-                             "mlx_hotwords": shared["mlx"]["hotwords"],
+                             "initial_prompt": initial_prompt or asr_settings["initial_prompt"],
+                             "mlx_hotwords": asr_settings["hotwords"],
                              "description_txt_template": download.get("DescriptionTxtTemplate", ""),
                              "native_hevc_preset": shared["download"]["native_hevc_preset"],
                              "download_engine_strategy": shared["download"]["engine_strategy"],
                              "vad_enabled": shared["mlx"]["vad_enabled"],
-                             "vad_threshold": shared["mlx"]["vad_threshold"],
+                             "vad_threshold": asr_settings["vad_threshold"],
                              "chunk_duration": shared["mlx"]["chunk_duration"],
                              "chunk_overlap": shared["mlx"]["chunk_overlap"],
                              "workflow_settings": shared}}
@@ -158,11 +193,18 @@ class JobManager:
         state.update(status="starting", stage="starting", progress=0, message="Starting worker", error=None)
         work_dir = Path(state.get("flow_dir") or state["directory"])
         work_dir.mkdir(parents=True, exist_ok=True)
-        with (work_dir / "worker.log").open("ab") as log:
+        # Windows cannot move an open stdout log when staging becomes <title>/flow.
+        log_path = work_dir / "worker.log"
+        if os.name == "nt":
+            log_path = self.store.root / "logs" / f"{state['job_id']}.log"
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            state["worker_log_path"] = str(log_path)
+        with log_path.open("ab") as log:
             process = subprocess.Popen([sys.executable, "-m", "app.mcp.worker", "--root", str(self.store.root),
                                         "--job", state["job_id"], "--token", token],
                                        cwd=PROJECT, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                                       start_new_session=True)
+                                       **({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS}
+                                          if os.name == "nt" else {"start_new_session": True}))
         state["worker"] = {"pid": process.pid, "created": psutil.Process(process.pid).create_time(), "token": token}
         # Reap children while this server is alive, without tying job lifetime to it.
         threading.Thread(target=process.wait, daemon=True).start()
@@ -192,7 +234,21 @@ class JobManager:
             state.update(status="cancelled", message="Cancelled; checkpoints retained", worker=None)
             if proc is not None:
                 try:
-                    if os.getpgid(proc.pid) == proc.pid:
+                    if os.name == "nt":
+                        children = proc.children(recursive=True)
+                        for child in children:
+                            try:
+                                child.terminate()
+                            except psutil.NoSuchProcess:
+                                pass
+                        proc.terminate()
+                        _, alive = psutil.wait_procs(children + [proc], timeout=2)
+                        for child in alive:
+                            try:
+                                child.kill()
+                            except psutil.NoSuchProcess:
+                                pass
+                    elif os.getpgid(proc.pid) == proc.pid:
                         os.killpg(proc.pid, signal.SIGTERM)
                         try:
                             proc.wait(timeout=2)
@@ -200,7 +256,7 @@ class JobManager:
                             pass
                         # Kill any remaining descendants in this task's dedicated group.
                         os.killpg(proc.pid, signal.SIGKILL)
-                except ProcessLookupError:
+                except (ProcessLookupError, psutil.NoSuchProcess):
                     pass
         return self.get_job(job_id)
 

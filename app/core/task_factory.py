@@ -52,13 +52,8 @@ class TaskFactory:
             need_word_time_stamp=need_word_time_stamp,
             # WhisperX 配置
             whisperx_model=cfg.whisperx_model.value,
-            whisperx_device="cpu" if WHISPERX_ONLY_MODE else cfg.whisperx_device.value,
-            whisperx_compute_type=(
-                "int8"
-                if WHISPERX_ONLY_MODE
-                and cfg.whisperx_compute_type.value in {"float16", "int8_float16"}
-                else cfg.whisperx_compute_type.value
-            ),
+            whisperx_device=cfg.whisperx_device.value,
+            whisperx_compute_type=cfg.whisperx_compute_type.value,
             whisperx_batch_size=cfg.whisperx_batch_size.value,
             whisperx_auto_language=cfg.whisperx_auto_language.value,
             whisperx_hotwords=cfg.whisperx_hotwords.value,

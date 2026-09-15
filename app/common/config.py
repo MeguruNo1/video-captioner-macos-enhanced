@@ -49,9 +49,9 @@ DEFAULT_TRANSCRIBE_MODEL = (
     if WHISPERX_ONLY_MODE
     else TranscribeModelEnum.WHISPER_X
 )
-WHISPERX_DEVICE_OPTIONS = ["cpu"] if WHISPERX_ONLY_MODE else ["cuda", "cpu"]
-DEFAULT_WHISPERX_DEVICE = "cpu" if WHISPERX_ONLY_MODE else "cuda"
-DEFAULT_WHISPERX_COMPUTE_TYPE = "int8" if WHISPERX_ONLY_MODE else "float16"
+WHISPERX_DEVICE_OPTIONS = ["auto", "cuda", "cpu"]
+DEFAULT_WHISPERX_DEVICE = "auto"
+DEFAULT_WHISPERX_COMPUTE_TYPE = "auto"
 DEFAULT_WHISPERX_WORD_TIMESTAMPS = True if WHISPERX_ONLY_MODE else False
 
 
@@ -586,8 +586,5 @@ qconfig.load(SETTINGS_PATH, cfg)
 cfg.mlx_model.value = preferred_mlx_model(cfg.mlx_model.value)
 
 if WHISPERX_ONLY_MODE and cfg.transcribe_model.value == TranscribeModelEnum.WHISPER_X:
-    cfg.set(cfg.whisperx_device, "cpu")
-    if cfg.whisperx_compute_type.value in {"float16", "int8_float16"}:
-        cfg.set(cfg.whisperx_compute_type, "int8")
     cfg.set(cfg.whisperx_word_timestamps, True)
     cfg.set(cfg.whisperx_align, True)

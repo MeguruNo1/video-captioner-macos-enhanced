@@ -173,6 +173,8 @@ def align_transcription_with_whisperx(
     if not segments:
         return {"segments": [], "word_segments": [], "language": language_code}
 
+    from app.core.utils.acceleration import resolve_whisperx_device
+    device = resolve_whisperx_device(device, "auto")["device"]
     try:
         import whisperx
     except ImportError as exc:
@@ -290,6 +292,11 @@ class WhisperXASR(BaseASR):
         except ImportError:
             return self._run_external(callback)
 
+        from app.core.utils.acceleration import resolve_whisperx_device
+        selected = resolve_whisperx_device(self.device, self.compute_type)
+        self.device, self.compute_type = selected["device"], selected["compute_type"]
+        callback(0, f"WhisperX: {self.device} / {self.compute_type}")
+
         return self._run_local(whisperx, callback)
 
     def _run_local(self, whisperx, callback) -> dict:
@@ -348,6 +355,11 @@ class WhisperXASR(BaseASR):
                 "WhisperX is not available in the embedded runtime, and no usable "
                 "system Python with whisperx/torch/torchaudio was found."
             )
+
+        from app.core.utils.acceleration import inspect_acceleration, resolve_whisperx_device
+        selected = resolve_whisperx_device(self.device, self.compute_type, inspect_acceleration(python_exe))
+        self.device, self.compute_type = selected["device"], selected["compute_type"]
+        callback(0, f"WhisperX: {self.device} / {self.compute_type}")
 
         runner_path = Path(__file__).with_name(RUNNER_FILE)
         if not runner_path.exists():

@@ -300,9 +300,6 @@ class WhisperXSettingWidget(QWidget):
 
     def setup_ui(self):
         if WHISPERX_ONLY_MODE:
-            cfg.set(cfg.whisperx_device, "cpu")
-            if cfg.whisperx_compute_type.value in {"float16", "int8_float16"}:
-                cfg.set(cfg.whisperx_compute_type, "int8")
             cfg.set(cfg.whisperx_word_timestamps, True)
             cfg.set(cfg.whisperx_align, True)
 
@@ -311,7 +308,7 @@ class WhisperXSettingWidget(QWidget):
         self.main_layout.setSpacing(0)
 
         self.setting_group = SettingCardGroup(
-            self.tr("WhisperX 设置（CPU / 词级时间轴）")
+            self.tr("WhisperX 设置（自动 / CUDA / CPU）")
             if WHISPERX_ONLY_MODE
             else self.tr("WhisperX 设置（需本地 Python 依赖）"),
             self,
@@ -347,8 +344,8 @@ class WhisperXSettingWidget(QWidget):
             cfg.whisperx_device,
             FIF.IOT,
             self.tr("运行设备"),
-            self.tr("WhisperX 运行设备"),
-            ["cpu"] if WHISPERX_ONLY_MODE else ["cuda", "cpu"],
+            self.tr("auto 检查运行环境后优先使用 CUDA，否则使用 CPU"),
+            ["auto", "cuda", "cpu"],
             self.setting_group,
         )
 
@@ -357,9 +354,7 @@ class WhisperXSettingWidget(QWidget):
             FIF.ROBOT,
             self.tr("计算精度"),
             self.tr("设置 WhisperX 的计算精度"),
-            ["int8", "float32", "int8_float32"]
-            if WHISPERX_ONLY_MODE
-            else ["float16", "int8", "int8_float16", "float32"],
+            ["auto", "float16", "int8", "int8_float16", "int8_float32", "float32"],
             self.setting_group,
         )
 
@@ -457,7 +452,6 @@ class WhisperXSettingWidget(QWidget):
         self.setting_group.addSettingCard(self.align_card)
 
         if WHISPERX_ONLY_MODE:
-            self.device_card.setEnabled(False)
             self.word_timestamps_card.setEnabled(False)
             self.align_card.setEnabled(False)
 

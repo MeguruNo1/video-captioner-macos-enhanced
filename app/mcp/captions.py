@@ -15,16 +15,16 @@ def words_from_result(result, prefix="w", offset=0):
     for segment in result.get("segments", []):
         raw_words = segment.get("words") or []
         if not raw_words and str(segment.get("text", "")).strip():
-            raise ValueError("MLX returned speech without word timestamps; retranscribe before captioning")
+            raise ValueError("ASR returned speech without word timestamps; retranscribe before captioning")
         for raw in raw_words:
             text = str(raw.get("word") or raw.get("text") or "").strip()
             if not text:
                 continue
             start, end = raw.get("start"), raw.get("end")
             if not isinstance(start, (int, float)) or not isinstance(end, (int, float)):
-                raise ValueError("MLX word is missing timestamps")
+                raise ValueError("ASR word is missing timestamps")
             if not math.isfinite(start) or not math.isfinite(end):
-                raise ValueError("MLX word has non-finite timestamps")
+                raise ValueError("ASR word has non-finite timestamps")
             words.append({"id": f"{prefix}{len(words):06d}", "text": text,
                           "start_ms": round((start + offset) * 1000),
                           "end_ms": round((end + offset) * 1000)})
@@ -126,7 +126,7 @@ def validate(state):
         if start < 0 or end < start or start < previous_start or (duration and end > duration + 100):
             errors.append(f"Invalid word timing: {word['id']}")
         elif end == start:
-            warnings.append(f"Zero-duration MLX word; review its containing caption: {word['id']}")
+            warnings.append(f"Zero-duration ASR word; review its containing caption: {word['id']}")
         if end - start > 3000:
             warnings.append(f"Unusually long word: {word['id']}")
         previous_start = start

@@ -1,6 +1,5 @@
-"""Atomic task snapshots and process-shared locks (macOS/Linux)."""
+"""Atomic task snapshots and process-shared locks on POSIX and Windows."""
 from contextlib import contextmanager
-import fcntl
 import json
 import os
 from pathlib import Path
@@ -8,8 +7,15 @@ import re
 import tempfile
 import time
 
-DEFAULT_ROOT = Path.home() / "Library/Application Support/VideoCaptioner/mcp"
-DEFAULT_OUTPUT = Path.home() / "Movies/VideoCaptioner"
+from app.core.utils.platform_utils import app_data_dir, default_work_dir
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
+
+DEFAULT_ROOT = app_data_dir("VideoCaptioner") / "mcp"
+DEFAULT_OUTPUT = default_work_dir("VideoCaptioner")
 
 
 def atomic_json(path: Path, value):
@@ -28,12 +34,31 @@ def atomic_json(path: Path, value):
 @contextmanager
 def file_lock(path: Path, blocking=True):
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a+") as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+    with path.open("a+b") as handle:
+        if os.name == "nt":
+            if handle.tell() == 0:
+                handle.write(b"\0")
+                handle.flush()
+            while True:
+                handle.seek(0)
+                try:
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError as exc:
+                    import errno
+                    if not blocking or exc.errno not in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                        raise
+                    time.sleep(0.05)
+        else:
+            fcntl.flock(handle, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
         try:
             yield
         finally:
-            fcntl.flock(handle, fcntl.LOCK_UN)
+            if os.name == "nt":
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(handle, fcntl.LOCK_UN)
 
 
 class Store:

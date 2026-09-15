@@ -148,8 +148,9 @@ def test_start_job_snapshots_current_desktop_settings(tmp_path, monkeypatch):
                      "NeedsRemovePunctuation": True},
     }
     monkeypatch.setattr("app.mcp.jobs.read_settings", lambda: settings)
-    monkeypatch.setattr("app.mcp.jobs.check_environment", lambda model=None: {
-        "ready": True, "errors": [], "local_model": "/models/configured"
+    monkeypatch.setattr("app.mcp.jobs.check_environment", lambda *args: {
+        "ready": True, "errors": [], "local_model": "/models/configured",
+        "selection": {"backend": "mlx", "device": "metal", "compute_type": "model"}
     })
     monkeypatch.setattr(manager, "resume_job", lambda job_id: manager.get_job(job_id))
     result = manager.start_job("https://example.com/video")

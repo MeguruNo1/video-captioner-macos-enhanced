@@ -5,7 +5,9 @@ from pathlib import Path
 from .terms import DEFAULT_GLOSSARY_PATH
 
 
-SETTINGS_PATH = Path.home() / "Library/Application Support/VideoCaptioner/settings.json"
+from app.core.utils.platform_utils import app_data_dir, DEFAULT_COOKIE_BROWSER_LABEL
+
+SETTINGS_PATH = app_data_dir("VideoCaptioner") / "settings.json"
 
 
 def read_shared_settings(path=SETTINGS_PATH):
@@ -28,6 +30,7 @@ def workflow_settings_snapshot(settings):
     download = settings.get("Download") or {}
     mlx = settings.get("MLXWhisper") or {}
     subtitle = settings.get("Subtitle") or {}
+    whisperx = settings.get("WhisperX") or {}
     strategy = download.get("EngineStrategy", "智能选择")
     if strategy not in {"单线程", "多线程", "智能选择"}:
         strategy = "智能选择"
@@ -38,7 +41,7 @@ def workflow_settings_snapshot(settings):
             "engine_strategy": strategy,
             "native_hevc_preset": download.get("NativeHevcPreset", "highest_quality"),
             "auto_refresh_cookies": bool(download.get("AutoRefreshEdgeCookies", False)),
-            "cookie_browser": download.get("CookieBrowser", "Safari"),
+            "cookie_browser": download.get("CookieBrowser", DEFAULT_COOKIE_BROWSER_LABEL),
         },
         "mlx": {
             "model": mlx.get("Model") or "mlx-community/whisper-large-v3-turbo",
@@ -48,6 +51,17 @@ def workflow_settings_snapshot(settings):
             "vad_threshold": _number(mlx.get("VadThreshold"), 0.5, 0.0, 1.0),
             "chunk_duration": int(_number(mlx.get("ChunkDuration"), 600, 60, 1800)),
             "chunk_overlap": int(_number(mlx.get("ChunkOverlap"), 30, 0, 300)),
+        },
+        "whisperx": {
+            "model": whisperx.get("Model") or "large-v3-turbo",
+            "device": whisperx.get("Device") or "auto",
+            "compute_type": whisperx.get("ComputeType") or "auto",
+            "batch_size": int(_number(whisperx.get("BatchSize"), 8, 1, 64)),
+            "initial_prompt": str(whisperx.get("InitialPrompt") or ""),
+            "hotwords": str(whisperx.get("Hotwords") or ""),
+            "vad_method": whisperx.get("VadMethod") or "silero",
+            "vad_threshold": _number(whisperx.get("VadThreshold"), 0.5, 0, 1),
+            "local_silero_dir": str(whisperx.get("LocalSileroDir") or ""),
         },
         "subtitle": {
             "glossary_path": str(Path(subtitle.get("TermGlossaryPath") or DEFAULT_GLOSSARY_PATH).expanduser()),

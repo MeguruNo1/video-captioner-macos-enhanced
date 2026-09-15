@@ -56,6 +56,7 @@ bash "$PROJECT_ROOT/scripts/build_macos_app.sh" >/dev/null
     --icon "$ICON_FILE" \
     --osx-bundle-identifier "$BUNDLE_ID" \
     --add-data "$PROJECT_ROOT/resource/assets/logo.png:resource/assets" \
+    --add-data "$PROJECT_ROOT/app/core/utils/acceleration.py:app/core/utils" \
     --hidden-import whisperx \
     --hidden-import mlx_whisper \
     --hidden-import torch \

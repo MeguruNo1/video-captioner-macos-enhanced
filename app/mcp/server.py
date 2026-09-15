@@ -4,7 +4,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .jobs import JobManager, check_environment as inspect_environment
 
-mcp = FastMCP("videocaptioner", instructions="Local media workflow. Transcription uses MLX; the client must proofread, segment and translate caption batches. Do not use a translation API or computer control.")
+mcp = FastMCP("videocaptioner", instructions="Local media workflow. Call check_environment before starting to inspect CPU/GPU runtime support. Auto selects MLX Metal on Apple Silicon, otherwise usable WhisperX CUDA or CPU; honor explicit backend/device choices and report the selected device and fallback reason. Missing CUDA runtime is not proof the machine has no compatible GPU. Do not install drivers or change the backend silently. Transcription is local; the client must proofread, segment and translate caption batches. Do not use a translation API or computer control.")
 manager = JobManager()
 
 
@@ -17,22 +17,23 @@ class Caption(BaseModel):
 
 
 @mcp.tool()
-def check_environment(model: str | None = None) -> dict:
-    """Check local MLX model, Python packages and FFmpeg; does not download models."""
-    return inspect_environment(model)
+def check_environment(model: str | None = None, backend: str = "auto", device: str = "auto", compute_type: str = "auto") -> dict:
+    """Inspect CPU/GPU runtime, supported compute types, selected local ASR, model cache and dependencies without downloading. backend=auto|mlx|whisperx; device=auto|cuda|cpu (MLX uses Metal). Explicit unsupported choices fail. Probe success does not guarantee model fits GPU memory."""
+    return inspect_environment(model, backend, device, compute_type)
 
 
 @mcp.tool()
 def start_job(url: str, source_language: str = "en", target_language: str = "zh-CN",
               output_dir: str | None = None, model: str | None = None, format_selector: str = "",
-              proxy_url: str | None = None, cookie_file: str | None = None, initial_prompt: str = "") -> dict:
-    """Start one video download and native MLX transcription in a background process. Returns job ID immediately. Empty proxy_url disables proxy; None uses saved settings. Source auto detects language."""
-    return manager.start_job(url, source_language, target_language, output_dir, model, format_selector, proxy_url, cookie_file, initial_prompt)
+              proxy_url: str | None = None, cookie_file: str | None = None, initial_prompt: str = "",
+              backend: str = "auto", device: str = "auto", compute_type: str = "auto") -> dict:
+    """Start one video download and hardware-selected local transcription in a background process. Returns job ID immediately. Empty proxy_url disables proxy; None uses saved settings. Source auto detects language."""
+    return manager.start_job(url, source_language, target_language, output_dir, model, format_selector, proxy_url, cookie_file, initial_prompt, backend, device, compute_type)
 
 
 @mcp.tool()
 def get_job(job_id: str) -> dict:
-    """Read progress, errors, completed batch counts and output paths. Poll every 5-15 seconds during local processing."""
+    """Read progress, errors, completed batch counts and output paths. Prefer completion notifications; otherwise poll after 10 seconds, back off to 60 seconds while unchanged, reset on phase change."""
     return manager.get_job(job_id)
 
 
@@ -57,7 +58,7 @@ def submit_caption_batch(job_id: str, batch_id: str, revision: int, captions: li
 
 @mcp.tool()
 def retranscribe_range(job_id: str, start_word_id: str, end_word_id: str, revision: int, initial_prompt: str = "") -> dict:
-    """Start local MLX re-transcription; expands to complete affected batches. Replaces their word IDs, invalidates their translations, and retains other completed batches. Fetch new batch IDs afterwards."""
+    """Start local re-transcription with the saved backend/device; expands to complete affected batches. Replaces their word IDs, invalidates their translations, and retains other completed batches. Fetch new batch IDs afterwards."""
     return manager.retranscribe_range(job_id, start_word_id, end_word_id, revision, initial_prompt)
 
 

@@ -1,2 +1,2 @@
-# Add to the existing macOS environment. No separate translation API is used.
+# Add to an existing macOS or Windows desktop environment. No translation API is used.
 mcp>=1.28,<2

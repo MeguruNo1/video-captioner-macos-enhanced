@@ -53,11 +53,8 @@ def transcribe(audio_path: str, config: TranscribeConfig, callback=None) -> ASRD
         return asr_data
 
     config.transcribe_model = TranscribeModelEnum.WHISPER_X
-    config.whisperx_device = "cpu"
     config.need_word_time_stamp = True
     config.whisperx_align = True
-    if config.whisperx_compute_type in {"float16", "int8_float16"}:
-        config.whisperx_compute_type = "int8"
 
     # 构建ASR参数
     asr_args = {

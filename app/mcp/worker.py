@@ -34,16 +34,32 @@ class Worker:
         return self.update(status=name, stage=name, progress=progress, message=message)
 
     def transcribe(self, path, options, prompt=None):
-        from app.core.bk_asr.mlx_whisper import MLXWhisperASR, build_mlx_initial_prompt
         initial_prompt = options["initial_prompt"] if prompt is None else prompt
-        asr = MLXWhisperASR(str(path), model=options["model"],
-                           language=None if options["source_language"] == "auto" else options["source_language"],
-                           initial_prompt=build_mlx_initial_prompt(initial_prompt, options.get("mlx_hotwords")),
-                           need_word_time_stamp=True, alignment_method="native", use_cache=False,
-                           vad_enabled=options["vad_enabled"],
-                           vad_threshold=options.get("vad_threshold", 0.5),
-                           chunk_duration=options.get("chunk_duration", 600),
-                           chunk_overlap=options.get("chunk_overlap", 30))
+        language = None if options["source_language"] == "auto" else options["source_language"]
+        backend = options.get("backend", "mlx")  # Existing jobs retain MLX/native timestamps.
+        if backend == "mlx":
+            from app.core.bk_asr.mlx_whisper import MLXWhisperASR, build_mlx_initial_prompt
+            asr = MLXWhisperASR(str(path), model=options["model"], language=language,
+                               initial_prompt=build_mlx_initial_prompt(initial_prompt, options.get("mlx_hotwords")),
+                               need_word_time_stamp=True, alignment_method="native", use_cache=False,
+                               vad_enabled=options["vad_enabled"],
+                               vad_threshold=options.get("vad_threshold", 0.5),
+                               chunk_duration=options.get("chunk_duration", 600),
+                               chunk_overlap=options.get("chunk_overlap", 30))
+        elif backend == "whisperx":
+            from app.core.bk_asr.whisper_x_auto import WhisperXASR
+            from app.core.utils.platform_utils import app_data_dir
+            asr = WhisperXASR(str(path), whisper_model=options["model"], language=language,
+                              device=options["device"], compute_type=options["compute_type"],
+                              batch_size=options.get("batch_size", 8), initial_prompt=initial_prompt,
+                              hotwords=options.get("mlx_hotwords", ""),
+                              vad_method=options.get("vad_method", "silero"),
+                              vad_threshold=options.get("vad_threshold", 0.5),
+                              local_silero_dir=options.get("local_silero_dir", ""),
+                              model_dir=str(app_data_dir("VideoCaptioner") / "models"),
+                              align=True, need_word_time_stamp=True, use_cache=False)
+        else:
+            raise ValueError(f"Unknown saved ASR backend: {backend}")
         return asr._run(lambda progress, message: self.update(progress=progress, message=message))
 
     def run(self):
@@ -112,13 +128,14 @@ class Worker:
                 if not duration or duration <= 0:
                     raise ValueError("Audio duration could not be determined")
                 state = self.update(audio_path=str(audio), duration_ms=round(duration * 1000))
-            self.stage("waiting_for_mlx", message="Waiting for the local MLX worker slot")
-            with file_lock(self.store.root / "mlx.lock"):
+            backend = options.get("backend", "mlx")
+            self.stage("waiting_for_asr", message=f"Waiting for local {backend} worker slot")
+            with file_lock(self.store.root / f"{backend}.lock"):
                 # Cancellation while waiting is handled by the worker's SIGTERM.
                 if state.get("retranscribe"):
                     self.retranscribe(state, directory, audio, options)
                 elif not state["words"]:
-                    self.stage("transcribing", message="Transcribing with local MLX Whisper")
+                    self.stage("transcribing", message=f"Transcribing with local {backend} / {options.get('device', 'metal')}")
                     raw_path = directory / "transcript-original.json"
                     words = None
                     if raw_path.exists():
@@ -135,10 +152,13 @@ class Worker:
                         words = words_from_result(result)
                     self.update(words=words, batches=make_batches(words))
             # Record import isolation as useful diagnostic evidence.
-            forbidden = [name for name in sys.modules if name == "whisperx" or name.startswith("whisperx.") or name == "app.core.bk_asr.whisper_x_auto" or name.startswith("PyQt5") or name == "openai" or name.startswith("openai.")]
-            atomic_json(directory / "runtime.json", {"asr": "mlx_whisper", "alignment": "native", "unexpected_modules": forbidden})
+            forbidden = [name for name in sys.modules if name.startswith("PyQt5") or name == "openai" or name.startswith("openai.")
+                         or (backend == "mlx" and (name == "whisperx" or name.startswith("whisperx.") or name == "app.core.bk_asr.whisper_x_auto"))]
+            atomic_json(directory / "runtime.json", {"asr": backend,
+                        "device": options.get("device", "metal"), "compute_type": options.get("compute_type", "model"),
+                        "alignment": "native" if backend == "mlx" else "whisperx", "unexpected_modules": forbidden})
             if forbidden:
-                raise RuntimeError("Headless worker imported an unexpected GUI/WhisperX/API module: " + ", ".join(forbidden))
+                raise RuntimeError("Headless worker imported an unexpected GUI/API or unrelated ASR module: " + ", ".join(forbidden))
             self.update(status="awaiting_captions", stage="awaiting_captions", progress=100,
                         message="Transcription saved. Codex can now process caption batches.", worker=None)
 
