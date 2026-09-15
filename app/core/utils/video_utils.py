@@ -250,6 +250,7 @@ def transcode_video_to_hevc(
     progress_callback: callable = None,
     *,
     transcode_audio_to_aac: bool = False,
+    encoder_preference: str = "auto",
 ) -> str:
     input_path = Path(input_file)
     output_path = Path(output_file)
@@ -257,8 +258,16 @@ def transcode_video_to_hevc(
     if not input_path.is_file():
         raise FileNotFoundError(f"输入视频不存在: {input_file}")
 
-    hardware_encoder = pick_hardware_hevc_encoder()
-    software_encoder = pick_software_hevc_encoder()
+    if encoder_preference not in {"auto", "hevc_nvenc", "hevc_qsv", "hevc_amf", "libx265"}:
+        raise ValueError(f"未知 H.265 编码器: {encoder_preference}")
+    if encoder_preference == "auto":
+        hardware_encoder = pick_hardware_hevc_encoder()
+        software_encoder = pick_software_hevc_encoder()
+    else:
+        if encoder_preference not in _get_available_ffmpeg_encoders():
+            raise RuntimeError(f"当前 FFmpeg 未提供指定编码器 {encoder_preference}；请检查 FFmpeg 或选择自动")
+        hardware_encoder = encoder_preference if encoder_preference != "libx265" else None
+        software_encoder = "libx265" if encoder_preference == "libx265" else None
     if not hardware_encoder and not software_encoder:
         raise RuntimeError("当前 FFmpeg 环境不可用 HEVC 编码器")
 
@@ -356,6 +365,7 @@ def normalize_video_to_mp4(
     output_file: str,
     progress_callback: callable = None,
     force_hevc_for_codecs: Collection[str] | None = None,
+    encoder_preference: str = "auto",
 ) -> str:
     """Normalize a fallback download to an MP4 with Premiere-compatible audio.
 
@@ -422,6 +432,7 @@ def normalize_video_to_mp4(
         str(temp_output),
         progress_callback=progress_callback,
         transcode_audio_to_aac=True,
+        encoder_preference=encoder_preference,
     )
     os.replace(temp_output, output_path)
     logger.info("MP4 规范化完成（H.265 + AAC）: %s", output_path)

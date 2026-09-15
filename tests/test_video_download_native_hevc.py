@@ -21,6 +21,7 @@ class NativeHevcPostprocessTests(unittest.TestCase):
         )
         thread.pr_smart_transcode_hevc_on_av1 = True
         thread.progress = _Progress()
+        thread.hevc_encoder = "auto"
         return thread
 
     def test_native_hevc_success_is_used_for_av1(self):
@@ -138,6 +139,7 @@ class NativeHevcPostprocessTests(unittest.TestCase):
                 str(input_path.with_name("video-hevc.mp4")),
                 progress_callback=thread.progress.emit,
                 transcode_audio_to_aac=True,
+                encoder_preference="auto",
             )
 
     def test_ffmpeg_failure_still_marks_manual_fallback(self):

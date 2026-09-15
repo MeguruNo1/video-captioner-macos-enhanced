@@ -39,6 +39,7 @@ def workflow_settings_snapshot(settings):
         "settings_path": str(SETTINGS_PATH),
         "download": {
             "engine_strategy": strategy,
+            "hevc_encoder": download.get("HevcEncoder", "auto"),
             "native_hevc_preset": download.get("NativeHevcPreset", "highest_quality"),
             "auto_refresh_cookies": bool(download.get("AutoRefreshEdgeCookies", False)),
             "cookie_browser": download.get("CookieBrowser", DEFAULT_COOKIE_BROWSER_LABEL),

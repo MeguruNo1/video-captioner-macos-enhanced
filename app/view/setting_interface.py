@@ -514,15 +514,14 @@ class SettingInterface(ScrollArea):
             texts=["单线程", "多线程", "智能选择"],
             parent=self.downloadSettingGroup,
         )
-        self.downloadNativeHevcPresetCard = ComboBoxSettingCard(
-            cfg.download_native_hevc_preset,
+        self.downloadHevcEncoderCard = ComboBoxSettingCard(
+            cfg.download_hevc_encoder,
             FIF.VIDEO,
-            self.tr("原生 H.265 转码预设"),
+            self.tr("H.265 转码编码器"),
             self.tr(
-                "用于 PR 智能预设的 AV1/VP9 转码；快速档输出最高 1080p，"
-                "均衡档输出最高 4K"
+                "自动优先使用硬件编码，失败后使用 CPU；指定编码器不可用时会报错"
             ),
-            texts=["快速（1080p）", "均衡（最高 4K）", "最高质量（保留原设置）"],
+            texts=["自动", "NVIDIA NVENC", "Intel QSV", "AMD AMF", "CPU（libx265）"],
             parent=self.downloadSettingGroup,
         )
         self.downloadAutoExtractCookiesOnStartupCard = SwitchSettingCard(
@@ -661,7 +660,7 @@ class SettingInterface(ScrollArea):
 
         self.saveGroup.addSettingCard(self.savePathCard)
         self.downloadSettingGroup.addSettingCard(self.downloadEngineStrategyCard)
-        self.downloadSettingGroup.addSettingCard(self.downloadNativeHevcPresetCard)
+        self.downloadSettingGroup.addSettingCard(self.downloadHevcEncoderCard)
         self.downloadSettingGroup.addSettingCard(
             self.downloadAutoExtractCookiesOnStartupCard
         )

@@ -1289,10 +1289,12 @@ class VideoDownloadService:
         progress_callback=None,
         cancel_event=None,
         native_hevc_preset: str = "highest_quality",
+        hevc_encoder: str = "auto",
     ):
         self.proxy_url = proxy_url
         self.cookie_file = cookie_file
         self.native_hevc_preset = native_hevc_preset
+        self.hevc_encoder = hevc_encoder
         # Qt's signals are provided by the wrapper; plain services use callbacks.
         for name in ("finished", "detailed_finished", "progress", "progress_detail", "error", "cancelled"):
             if not hasattr(self, name):
@@ -1823,7 +1825,8 @@ class VideoDownloadService:
         source_path = Path(video_path)
         target_path = source_path.with_name(f"{source_path.stem}-hevc.mp4")
 
-        native_supported = is_native_hevc_transcode_supported()
+        encoder_preference = getattr(self, "hevc_encoder", "auto")
+        native_supported = encoder_preference == "auto" and is_native_hevc_transcode_supported()
         codec = ""
         if native_supported:
             try:
@@ -1863,6 +1866,7 @@ class VideoDownloadService:
                 str(target_path),
                 progress_callback=self.progress.emit,
                 transcode_audio_to_aac=True,
+                encoder_preference=encoder_preference,
             )
         except Exception as exc:
             logger.exception("FFmpeg H.265 后处理失败: %s", exc)
@@ -2101,6 +2105,7 @@ class VideoDownloadService:
             encoder = normalize_video_to_mp4(
                 str(source_path),
                 str(target_path),
+                encoder_preference=getattr(self, "hevc_encoder", "auto"),
                 progress_callback=self.progress.emit,
                 force_hevc_for_codecs={"av1", "vp9"},
             )
@@ -2258,6 +2263,7 @@ def __getattr__(name):
             QThread.__init__(self)
             from app.common.config import cfg
             kwargs.setdefault("native_hevc_preset", str(cfg.get(cfg.download_native_hevc_preset)))
+            kwargs.setdefault("hevc_encoder", str(cfg.get(cfg.download_hevc_encoder)))
             VideoDownloadService.__init__(self, *args, **kwargs)
 
         def run(self):

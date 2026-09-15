@@ -175,6 +175,7 @@ class JobManager:
                              "initial_prompt": initial_prompt or asr_settings["initial_prompt"],
                              "mlx_hotwords": asr_settings["hotwords"],
                              "description_txt_template": download.get("DescriptionTxtTemplate", ""),
+                             "hevc_encoder": shared["download"]["hevc_encoder"],
                              "native_hevc_preset": shared["download"]["native_hevc_preset"],
                              "download_engine_strategy": shared["download"]["engine_strategy"],
                              "vad_enabled": shared["mlx"]["vad_enabled"],

@@ -78,6 +78,7 @@ class Worker:
                            download_engine_strategy=options.get("download_engine_strategy"),
                            pr_smart_transcode_hevc_on_av1=True,
                            description_txt_template=options.get("description_txt_template"),
+                           hevc_encoder=options.get("hevc_encoder", "auto"),
                            native_hevc_preset=options.get("native_hevc_preset", "highest_quality"),
                            proxy_url=options["proxy_url"], cookie_file=options["cookie_file"],
                            progress_callback=lambda p, m: self.update(progress=p, message=m))

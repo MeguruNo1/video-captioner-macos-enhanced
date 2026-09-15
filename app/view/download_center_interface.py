@@ -65,6 +65,7 @@ class FfmpegHevcFallbackThread(QThread):
         super().__init__(parent)
         self.source_path = source_path
         self.target_path = target_path
+        self.encoder_preference = cfg.get(cfg.download_hevc_encoder)
 
     def run(self):
         try:
@@ -75,6 +76,7 @@ class FfmpegHevcFallbackThread(QThread):
                 self.target_path,
                 progress_callback=self.progress.emit,
                 transcode_audio_to_aac=True,
+                encoder_preference=self.encoder_preference,
             )
             self.completed.emit(self.target_path, encoder)
         except Exception as exc:

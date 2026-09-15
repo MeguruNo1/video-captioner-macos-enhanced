@@ -454,6 +454,10 @@ class Config(QConfig):
         "智能选择",
         OptionsValidator(["单线程", "多线程", "智能选择"]),
     )
+    download_hevc_encoder = OptionsConfigItem(
+        "Download", "HevcEncoder", "auto",
+        OptionsValidator(["auto", "hevc_nvenc", "hevc_qsv", "hevc_amf", "libx265"]),
+    )
     download_native_hevc_preset = OptionsConfigItem(
         "Download",
         "NativeHevcPreset",
