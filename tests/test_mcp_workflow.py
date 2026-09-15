@@ -357,3 +357,134 @@ def test_rejects_playlist_and_invalid_url_before_work(tmp_path):
     for url in ("file:///etc/passwd", "https://youtube.com/playlist?list=abc", "https://user:pass@youtube.com/watch?v=a"):
         with pytest.raises(ValueError): manager.start_job(url)
     assert not list(tmp_path.glob("jobs/*.json"))
+
+
+def continuity_job(job):
+    """Unpunctuated ASR whose 160-word boundary falls after 'I might just'."""
+    manager, job_id = job
+    texts = ['word'] * 157 + 'I might just keep it in the box and then'.split()
+    words = [{'id': f'w{i:06}', 'text': text, 'start_ms': i * 150,
+              'end_ms': (i + 1) * 150} for i, text in enumerate(texts)]
+    with manager.store.edit(job_id) as state:
+        state.update(words=words, batches=make_batches(words), duration_ms=30000)
+    return manager.get_caption_batch(job_id)
+
+
+def test_move_boundary_preserves_complete_sentence_and_word_timing(job):
+    manager, job_id = job
+    batch = continuity_job(job)
+    before = manager.store.read(job_id)
+    assert batch['words'][-1]['text'] == 'just'
+    result = manager.set_caption_batch_boundary(job_id, batch['batch_id'], 1, 'w000164')
+    assert result['revision'] == 2
+    updated = manager.get_caption_batch(job_id)
+    assert updated['words'][-1]['text'] == 'box'
+    assert updated['context_after'][0]['text'] == 'and'
+    items = [
+        {'start_word_id': 'w000000', 'end_word_id': 'w000156',
+         'source': 'Earlier speech.', 'translation': '前文'},
+        {'start_word_id': 'w000157', 'end_word_id': 'w000164',
+         'source': 'I might just keep it in the box.', 'translation': '我可能就把它放在盒子里吧'},
+    ]
+    manager.submit_caption_batch(job_id, batch['batch_id'], 2, items)
+    following = manager.get_caption_batch(job_id)
+    assert following['words'][0]['id'] == 'w000165'
+    assert manager.store.read(job_id)['words'] == before['words']
+    saved = manager.get_caption_batch(job_id, batch['batch_id'])['existing_captions'][-1]
+    assert saved['start_ms'] == before['words'][157]['start_ms']
+    assert saved['end_ms'] == before['words'][164]['end_ms']
+    manager.submit_caption_batch(job_id, following['batch_id'], following['revision'], [{
+        'start_word_id': 'w000165', 'end_word_id': 'w000166',
+        'source': 'And then', 'translation': '然后',
+    }])
+    result = manager.export_job(job_id)
+    assert result['exported']
+    original = Path(result['artifacts']['【字幕】「Sample Video」原文.srt']).read_text()
+    assert 'I might just keep it in the box.' in original
+    assert '...' not in original
+
+
+@pytest.mark.parametrize('end_id,expected_sizes', [('w000156', [157, 10]), ('w000166', [167])])
+def test_move_tail_or_consume_next_batch_preserves_exact_coverage(job, end_id, expected_sizes):
+    manager, job_id = job
+    batch = continuity_job(job)
+    before = manager.store.read(job_id)
+    manager.set_caption_batch_boundary(job_id, batch['batch_id'], 1, end_id)
+    state = manager.store.read(job_id)
+    fetched = [manager.get_caption_batch(job_id, b['id'])['words'] for b in state['batches']]
+    assert [len(words) for words in fetched] == expected_sizes
+    assert [w for words in fetched for w in words] == before['words']
+    assert state['batches'][0]['id'] == batch['batch_id']
+
+
+@pytest.mark.parametrize('failure', ['stale', 'unknown_word', 'unknown_batch', 'current_saved', 'next_saved', 'last_batch'])
+def test_boundary_rejection_is_atomic(job, failure):
+    manager, job_id = job
+    batch = continuity_job(job)
+    state = manager.store.read(job_id)
+    batch_id, revision, end_id = batch['batch_id'], 1, 'w000164'
+    if failure == 'stale':
+        revision = 0
+    elif failure == 'unknown_word':
+        end_id = 'missing'
+    elif failure == 'unknown_batch':
+        batch_id = 'missing'
+    elif failure == 'last_batch':
+        batch_id = state['batches'][-1]['id']
+    else:
+        index = 0 if failure == 'current_saved' else 1
+        saved_batch = manager.get_caption_batch(job_id, state['batches'][index]['id'])
+        manager.submit_caption_batch(job_id, saved_batch['batch_id'], 1, payload(saved_batch))
+        revision = 2
+    before = manager.store.read(job_id)
+    with pytest.raises(ValueError):
+        manager.set_caption_batch_boundary(job_id, batch_id, revision, end_id)
+    assert manager.store.read(job_id) == before
+
+
+def test_repeated_boundary_expansion_is_bounded(job):
+    manager, job_id = job
+    with manager.store.edit(job_id) as state:
+        words = [{'id': f'w{i:06}', 'text': 'word', 'start_ms': i*100,
+                  'end_ms': (i+1)*100} for i in range(480)]
+        state.update(words=words, batches=make_batches(words), duration_ms=48000)
+    batch = manager.get_caption_batch(job_id)
+    manager.set_caption_batch_boundary(job_id, batch['batch_id'], 1, 'w000319')
+    before = manager.store.read(job_id)
+    with pytest.raises(ValueError, match='320 words'):
+        manager.set_caption_batch_boundary(job_id, batch['batch_id'], 2, 'w000320')
+    assert manager.store.read(job_id) == before
+
+
+@pytest.mark.parametrize('cross_batch', [False, True])
+@pytest.mark.parametrize('gap,expected', [(0, True), (300, True), (301, False), (1500, False)])
+def test_continuation_ellipsis_warning_within_and_across_batches(job, cross_batch, gap, expected):
+    manager, job_id = job
+    state = manager.store.read(job_id)
+    words = state['words']
+    words[1]['end_ms'] = 1000
+    for word in words[2:]:
+        word['start_ms'] += gap
+        word['end_ms'] += gap
+    state['duration_ms'] += gap
+    state['batches'] = (make_batches(words[:2]) + make_batches(words[2:])
+                        if cross_batch else make_batches(words))
+    items = [
+        {'start_word_id': words[0]['id'], 'end_word_id': words[1]['id'],
+         'source': 'I might just...', 'translation': '我可能就……'},
+        {'start_word_id': words[2]['id'], 'end_word_id': words[3]['id'],
+         'source': '...keep it in the box.', 'translation': '……放在盒子里吧'},
+    ]
+    for i, batch in enumerate(state['batches']):
+        batch['captions'] = [items[i]] if cross_batch else items
+    report = validate(state)
+    assert any('artificial ellipsis split' in w for w in report['warnings']) == expected
+    if expected:
+        assert report['valid']  # Review warning, not a blanket ban on real hesitation.
+
+
+def test_batch_sentence_break_handles_quotes_but_not_ellipsis():
+    words = [{'id': f'w{i:06}', 'text': 'word'} for i in range(200)]
+    words[100]['text'] = 'finished.”'
+    words[150]['text'] = 'uh...'
+    assert make_batches(words)[0]['end_word_id'] == 'w000100'

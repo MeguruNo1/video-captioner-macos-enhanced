@@ -40,7 +40,7 @@ def make_batches(words):
         stop = min(cursor + BATCH_WORDS, len(words))
         if stop < len(words):
             for index in range(stop - 1, cursor + BATCH_WORDS // 2, -1):
-                if re.search(r"[.!?。！？]$", words[index]["text"]):
+                if re.search(r"(?<!\.)[.!?。！？][\"'”’」』]*$", words[index]["text"]):
                     stop = index + 1
                     break
         batches.append({"id": uuid4().hex, "start_word_id": words[cursor]["id"],
@@ -131,6 +131,7 @@ def validate(state):
             warnings.append(f"Unusually long word: {word['id']}")
         previous_start = start
     previous_end = -1
+    previous_caption = None
     for batch in state.get("batches", []):
         if not batch["captions"]:
             errors.append(f"Untranslated batch: {batch['id']}")
@@ -144,12 +145,23 @@ def validate(state):
             start, end = caption["start_ms"], caption["end_ms"]
             if start < previous_end:
                 errors.append(f"Overlapping captions at {caption['start_word_id']}")
+            if previous_caption and 0 <= start - previous_end <= 300:
+                for field in ("source", "translation"):
+                    if (re.search(r"(?:\.{3,}|…+)\s*$", previous_caption[field])
+                            and re.match(r"\s*(?:\.{3,}|…+)", caption[field])):
+                        warnings.append(
+                            f"Review artificial ellipsis split: {previous_caption['start_word_id']} -> "
+                            f"{caption['start_word_id']}; continuous speech may need one caption. "
+                            "Batch boundaries do not justify ellipses."
+                        )
+                        break
             text = caption["translation"]
             cjk = bool(re.search(r"[\u3400-\u9fff]", text))
             units = len(re.sub(r"\s", "", text))
             if end - start > 7000 or units > (42 if cjk else 84) or units / ((end-start)/1000) > (12 if cjk else 22):
                 warnings.append(f"Review reading length/speed: {caption['start_word_id']}")
             previous_end = end
+            previous_caption = caption
         warnings.extend(f"{batch['id']}: {note}" for note in batch.get("notes", []))
     return {"valid": not errors, "errors": errors[:100], "warnings": warnings[:100],
             "error_count": len(errors), "warning_count": len(warnings),

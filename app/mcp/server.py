@@ -50,6 +50,12 @@ def get_caption_batch(job_id: str, batch_id: str | None = None) -> dict:
 
 
 @mcp.tool()
+def set_caption_batch_boundary(job_id: str, batch_id: str, revision: int, end_word_id: str) -> dict:
+    """Before caption submission, move the boundary with the next unsubmitted batch to a semantic break. end_word_id is inclusive and must belong to either batch. Move an incomplete tail to the next batch or bring its continuation into this one. Both batches must be unsubmitted; each resulting batch is limited to 320 words. Word IDs/timestamps and other batches stay unchanged. Fetch the updated batch after success or a stale revision error."""
+    return manager.set_caption_batch_boundary(job_id, batch_id, revision, end_word_id)
+
+
+@mcp.tool()
 def submit_caption_batch(job_id: str, batch_id: str, revision: int, captions: list[Caption],
                          glossary: dict[str, str] | None = None, notes: list[str] | None = None) -> dict:
     """Save Codex's proofreading, semantic segments and translations. Cover batch words exactly once with inclusive continuous ID ranges. Time is computed locally. Exact retries are idempotent; changed stale revisions are rejected. Notes record uncertain transcription."""
