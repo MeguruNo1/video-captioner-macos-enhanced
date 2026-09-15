@@ -160,4 +160,63 @@ The original project was created by [@WEIFENG2333](https://github.com/WEIFENG233
 
 A local MCP server and Skill can download a video, transcribe with hardware-selected local MLX / WhisperX, and let the current Codex conversation proofread, segment, and translate captions. Each task uses a video-title directory and exports the final video, source/translated SRT, a proofread source transcript, and a template description. Highest-quality VP9/AV1 downloads are converted to HEVC. Jobs are resumable and support local re-transcription; no computer control or separate translation API is used. See the [Codex MCP guide](docs/codex-mcp.md).
 
+### Roles of MCP, the Skill, and Codex
+
+- **MCP** (Model Context Protocol) exposes local tools for downloading, transcription, recovery, and export.
+- **The Skill** is the [workflow instruction file](skills/videocaptioner/SKILL.md) shipped with this source tree. It guides hardware checks, proofreading, segmentation, translation, and delivery.
+- **Codex** processes subtitle text in the current conversation without a separate translation API. Audio stays local; subtitle text enters the conversation and normal Codex usage applies.
+
+This fork currently distributes MCP + Skill through a **source installation**. Installing the DMG or copying only `SKILL.md` does not register the MCP server. The upstream PyPI package does not contain this fork's integration.
+
+### Install MCP and the Skill
+
+Complete the platform-specific source setup above first. Keep the checkout and `.venv` in place. You need configured Codex access, the `codex` CLI on your terminal's `PATH`, and `ffmpeg`/`ffprobe`. Run these commands from the **project root**.
+
+**macOS:**
+
+```sh
+.venv/bin/python -m pip install -r requirements-mcp.txt
+.venv/bin/python scripts/install_codex_mcp.py --dry-run
+.venv/bin/python scripts/install_codex_mcp.py
+```
+
+**Windows PowerShell:**
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-mcp.txt
+.\.venv\Scripts\python.exe scripts/install_codex_mcp.py --dry-run
+.\.venv\Scripts\python.exe scripts/install_codex_mcp.py
+```
+
+The first line installs MCP dependencies using the project's Python: `-m` runs a module, and `-r` reads a requirements file. `--dry-run` previews registration; the last line registers the server and copies the Skill without starting a media job. `bin/python` and `Scripts\python.exe` are the macOS and Windows virtual-environment interpreters respectively.
+
+The installer writes the server entry into Codex's `config.toml` and copies the Skill into `skills/videocaptioner` under `CODEX_HOME`, or `.codex` in your home directory when unset. It backs up existing configuration and preserves other services. A conflicting server path or an unmanaged Skill of the same name stops installation with an explanation. Reload MCP and Skills after installation or updates, or restart Codex and open a new task. The server uses local standard input/output, with no listening network port; see the [official OpenAI MCP documentation](https://developers.openai.com/codex/mcp/).
+
+### Use it
+
+Ask Codex, replacing `VIDEO_URL` with one actual video URL:
+
+> Use videocaptioner for VIDEO_URL. Translate English into Simplified Chinese. Check local acceleration first, then deliver the video, bilingual subtitle files, and covers.
+
+You can also select the `/videocaptioner` Skill and provide a link. To pin a device, say “use WhisperX CUDA,” “CPU only,” or “use MLX.” Codex first calls `check_environment` and reports its selection and missing dependencies. Cache the transcription model locally before starting; WhisperX may download VAD/alignment models on first use.
+
+- **Acceleration:** Auto prefers usable Apple Silicon MLX Metal, otherwise usable WhisperX CUDA or CPU. Video encoding separately follows the Auto / NVIDIA NVENC / Intel QSV / AMD AMF / CPU setting.
+- **Resume/cancel:** Ask “continue job ID …” or “cancel job ID …,” using the ID returned at startup. If lost, ask Codex to list recent jobs. Existing jobs retain their saved settings.
+- **Delivery:** The task's `output` directory contains the final video, source/translated SRT, source transcript, description, and two covers; `flow` holds intermediate files. The default cover workflow also requires image editing tools in the current Codex environment.
+- **After closing Codex:** Local downloading/transcription can continue; proofreading and translation require returning to a Codex conversation.
+- **Updates:** After obtaining newer source in the same checkout, repeat the three platform-specific commands to update dependencies, preview registration, and sync the Skill. Reload MCP afterwards. Moving or deleting the checkout or virtual environment breaks the registered absolute paths.
+
+See the [MCP guide](docs/codex-mcp.md) for parameters, directories, timestamp validation, and recovery rules.
+
+### How upstream distributes the project
+
+Checked on 2026-09-15; upstream and fork versions are independent.
+
+| Channel | Upstream distribution |
+| --- | --- |
+| Python package | [PyPI videocaptioner](https://pypi.org/project/videocaptioner/) supplies CLI and GUI through `pip install videocaptioner`, which installs the upstream Python package, not this fork. |
+| GitHub Releases | [v1.4.2](https://github.com/WEIFENG2333/VideoCaptioner/releases/tag/v1.4.2) has `.whl` and `.tar.gz` Python packages. The verified [v1.3.3](https://github.com/WEIFENG2333/VideoCaptioner/releases/tag/v1.3.3) Windows installer is `VideoCaptioner-Setup-win64-v1.3.3.exe`; it is a different version. |
+| macOS / source | The [upstream README](https://github.com/WEIFENG2333/VideoCaptioner#readme) documents source development and a [run.sh installer/launcher](https://github.com/WEIFENG2333/VideoCaptioner/blob/master/scripts/run.sh). |
+| Skill | The [upstream Markdown Skill](https://github.com/WEIFENG2333/VideoCaptioner/blob/master/skills/SKILL.md) is copied to Claude Code's `~/.claude/skills/videocaptioner/` (`~` means home directory). It guides CLI calls; this fork instead supplies a Codex MCP workflow. |
+
 The shared download core incorporates production lessons documented by [FluentYTDL](https://github.com/SakuraForgot/FluentYTDL): yt-dlp's default YouTube client strategy, concurrent fragments with the full retry budget, staged authentication recovery, cleanup of stale partial state after 403 responses, and atomic cookie replacement only after candidate validation. Download Center, preview parsing, MCP, and compatibility threads all use these rules.

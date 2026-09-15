@@ -159,4 +159,63 @@ VIDEO_CAPTIONER_VERSION=macos-enhanced-v0.1.2 scripts/build_macos_release.sh
 
 新增本地 MCP + Skill 接入：提供视频链接，由硬件适配的本地 MLX / WhisperX 转录、当前 Codex 校对断句与翻译；按视频名建立任务目录，输出最终视频、原文/中文字幕、原文文稿及模板简介。最高画质下载遇到 VP9/AV1 时自动转为 HEVC，无需电脑操控或独立翻译 API。支持任务恢复和局部重转录。安装与使用见 [Codex MCP 指南](docs/codex-mcp.md)。
 
+### MCP、Skill 和 Codex 分别做什么
+
+- **MCP**（Model Context Protocol，模型上下文协议）：提供本机下载、转录、任务恢复和字幕导出工具。
+- **Skill**：随源码分发的 [工作流说明](skills/videocaptioner/SKILL.md)，指导 Codex 检查硬件、校对断句、翻译和交付。
+- **Codex**：在当前对话中处理字幕文本；不调用软件另配的翻译 API。音频留在本机，字幕文本会进入 Codex 对话，仍使用当前 Codex 账户额度。
+
+本分支的 MCP + Skill 目前采用**源码安装**。仅安装 DMG 或复制 `SKILL.md` 不会完成 MCP 注册；它们也不是 PyPI 上同名包的一部分。
+
+### 安装 MCP 和 Skill
+
+先完成上面的对应平台源码安装，保留项目目录和 `.venv`。需要已配置好的 Codex、可在终端找到的 `codex` CLI、`ffmpeg` 和 `ffprobe`。以下命令均在**项目根目录**执行。
+
+**macOS：**
+
+```sh
+.venv/bin/python -m pip install -r requirements-mcp.txt
+.venv/bin/python scripts/install_codex_mcp.py --dry-run
+.venv/bin/python scripts/install_codex_mcp.py
+```
+
+**Windows PowerShell：**
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-mcp.txt
+.\.venv\Scripts\python.exe scripts/install_codex_mcp.py --dry-run
+.\.venv\Scripts\python.exe scripts/install_codex_mcp.py
+```
+
+第一行使用项目虚拟环境安装 MCP 依赖：`-m`（module）以模块方式运行 pip，`-r`（requirements）读取依赖清单。第二行的 `--dry-run` 只预览注册位置；第三行实际注册 MCP 并复制 Skill，不启动媒体任务。`bin/python` 和 `Scripts\python.exe` 分别是 macOS、Windows 虚拟环境中的解释器。
+
+安装器将服务写入 Codex 的 `config.toml`，将 Skill 复制到其 `skills/videocaptioner` 目录；根目录采用 `CODEX_HOME` 环境变量，未设置时为用户目录下的 `.codex`。它会备份已有配置，保留其他服务；遇到同名但不同路径的 MCP 或非本安装器托管的 Skill，会停止并提示冲突。安装和后续更新后，重新加载 MCP、Skill，或重启 Codex 并新建任务。MCP 使用本地进程的标准输入/输出通信，无需开放服务端口；相关机制见 [OpenAI 官方 MCP 文档](https://developers.openai.com/codex/mcp/)。
+
+### 开始使用
+
+在 Codex 中输入以下示例，把 `视频链接` 替换为一个实际视频 URL：
+
+> 使用 videocaptioner 处理这个视频：视频链接。英语转简体中文，先检查本机加速能力，再输出视频、中英文字幕和封面。
+
+也可以先选择 `/videocaptioner` skill，再给出链接与要求。想固定设备时直接说明“使用 WhisperX CUDA”“仅用 CPU”或“使用 MLX”。Codex 会先调用 `check_environment`，报告可用后端、精度和缺失依赖。转写模型须先缓存到本机；WhisperX 的 VAD/对齐模型可能在首次转录时下载。
+
+- **自动加速**：可用的 Apple Silicon MLX Metal 优先，否则选择可用的 WhisperX CUDA 或 CPU。转码编码器则读取设置中的“自动 / NVIDIA NVENC / Intel QSV / AMD AMF / CPU”，与转写设备分开配置。
+- **继续或取消**：对 Codex 说“继续任务 ID …”或“取消任务 ID …”。任务 ID 是首次启动返回的标识；忘记时可让 Codex 列出最近任务。已开始任务保留自己的配置快照。
+- **完成结果**：任务目录的 `output` 中包含最终视频、原文/译文 SRT、原文文稿、简介和两张封面；`flow` 保存中间文件。默认封面流程还需要当前 Codex 环境可用的图像编辑工具。
+- **关闭 Codex 后**：本机下载/转录进程可以继续，字幕校对和翻译须恢复 Codex 对话后继续。
+- **更新**：在同一源码目录取得新版代码后，用对应平台的上述三行命令更新依赖、重新预览并同步 Skill，再重新加载 MCP。不要直接移动或删除已注册的源码和虚拟环境目录，否则绝对路径会失效。
+
+完整参数、目录位置、时间戳校验及恢复规则见 [Codex MCP 指南](docs/codex-mcp.md)。
+
+### 原项目如何分发
+
+以下为 2026-09-15 核对结果，上游版本和本分支版本独立：
+
+| 渠道 | 上游的做法 |
+| --- | --- |
+| Python 包 | [PyPI videocaptioner](https://pypi.org/project/videocaptioner/) 同时提供 CLI 和 GUI；安装命令是 `pip install videocaptioner`（pip 安装同名 Python 包），这是上游包，不会安装本分支的增强代码。 |
+| GitHub Release | [v1.4.2](https://github.com/WEIFENG2333/VideoCaptioner/releases/tag/v1.4.2) 附件为 `.whl` 和 `.tar.gz` Python 分发包；已核对的 Windows 安装包在 [v1.3.3](https://github.com/WEIFENG2333/VideoCaptioner/releases/tag/v1.3.3)，文件名为 `VideoCaptioner-Setup-win64-v1.3.3.exe`。不要将旧 EXE 当成最新 Python 版本。 |
+| macOS / 源码 | [上游 README](https://github.com/WEIFENG2333/VideoCaptioner#readme) 提供源码开发方式和 [run.sh](https://github.com/WEIFENG2333/VideoCaptioner/blob/master/scripts/run.sh) 安装/启动脚本。 |
+| Skill | [上游 Skill](https://github.com/WEIFENG2333/VideoCaptioner/blob/master/skills/SKILL.md) 是仓库中的 Markdown 文件，README 指导复制到 Claude Code 的 `~/.claude/skills/videocaptioner/`（`~` 表示用户主目录），由助手调用 `videocaptioner` CLI；与本分支的 Codex MCP 工作流不同。 |
+
 下载核心参考了 [FluentYTDL](https://github.com/SakuraForgot/FluentYTDL) 的生产经验：让 yt-dlp 使用其默认 YouTube 客户端策略、并行分片保持完整重试预算、认证失败分级恢复、403 过期断点清理，以及 Cookie 候选通过校验后再原子替换。这些规则由下载中心、预览解析、MCP 和兼容线程共同使用。

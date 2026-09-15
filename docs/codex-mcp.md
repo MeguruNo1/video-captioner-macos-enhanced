@@ -24,7 +24,7 @@
 
 默认下载最高可用视频画质；VP9/AV1 自动转为 HEVC，不额外压制硬字幕。输出原文 SRT、中文 SRT、最终视频、Codex 校订后的原文文稿及使用软件当前模板生成的简介文稿。支持 `source_language`、`target_language`、`output_dir`、本地 `model`、`format_selector`、`proxy_url`、`cookie_file`、`initial_prompt` 参数。`source_language=auto` 使用所选后端自动识别。新增 `backend=auto|mlx|whisperx`、`device=auto|cuda|cpu`、`compute_type=auto|float16|int8|…`；MLX 固定使用 Metal 和模型自带精度。
 
-每次 `start_job` 都读取软件界面保存的同一份 `settings.json`。代理、下载引擎策略、Cookie 自动刷新及浏览器、HEVC 预设、所选后端、设备、精度和模型/VAD/阈值/分块/热词，以及字幕长度、术语提示和文本后处理开关会保存为任务快照。界面修改自动作用于之后的新任务；运行中的任务保留启动时快照，保证恢复后结果一致。显式空代理表示直连。模型必须已经在本机路径或 Hugging Face 缓存中；缺失时 `check_environment` 会提示，不会自动下载大模型。依赖沿用对应平台的桌面环境。MLX 任务不加载 WhisperX；WhisperX 任务使用本地转录及强制对齐。两条路径都不加载 Qt 或调用翻译 API。WhisperX 的 VAD 和对齐模型可能在首次转录时下载，环境检查仅验证已缓存的转写模型。
+每次 `start_job` 都读取软件界面保存的同一份 `settings.json`。代理、下载引擎策略、Cookie 自动刷新及浏览器、H.265 转码编码器和旧版 macOS 原生预设、所选后端、设备、精度和模型/VAD/阈值/分块/热词，以及字幕长度、术语提示和文本后处理开关会保存为任务快照。界面修改自动作用于之后的新任务；运行中的任务保留启动时快照，保证恢复后结果一致。显式空代理表示直连。模型必须已经在本机路径或 Hugging Face 缓存中；缺失时 `check_environment` 会提示，不会自动下载大模型。依赖沿用对应平台的桌面环境。MLX 任务不加载 WhisperX；WhisperX 任务使用本地转录及强制对齐。两条路径都不加载 Qt 或调用翻译 API。WhisperX 的 VAD 和对齐模型可能在首次转录时下载，环境检查仅验证已缓存的转写模型。
 
 ## 任务与恢复
 
@@ -49,7 +49,7 @@ Codex 关闭后不能继续执行文本翻译；重新打开任务后从已保�
 
 `retranscribe_range` 将指定词范围扩展到完整受影响批次，用邻接时间锚点确定音频区间，再用任务快照中的后端转录。受影响批次及词 ID 更换，译文失效；其他已完成批次保留。原始及局部转录分别存档。
 
-`validate_job` 检查覆盖、空译文、非法时间和字幕重叠，结构错误会阻止 `export_job`。位于有效字幕内部的 零时长词作为警告供复核，若它导致字幕边界塌缩则仍阻止提交。阅读速度、长度和不确定听写同样列为警告。不能仅凭文本判断时间是否整体提前；后端生成的词时间戳仍需要实际抽查。再次修订后导出会原子更新 `output` 中同名字幕和文稿；字幕 JSON、术语表、检查报告及清单留在 `flow`。
+`validate_job` 检查覆盖、空译文、非法时间和字幕重叠，结构错误会阻止 `export_job`。位于有效字幕内部的零时长词作为警告供复核，若它导致字幕边界塌缩则仍阻止提交。阅读速度、长度和不确定听写同样列为警告。不能仅凭文本判断时间是否整体提前；后端生成的词时间戳仍需要实际抽查。再次修订后导出会原子更新 `output` 中同名字幕和文稿；字幕 JSON、术语表、检查报告及清单留在 `flow`。
 
 软件字幕流程和 MCP 导出都会补齐相邻字幕之间不超过 500 毫秒的正间隙：前一条字幕延长到下一条开始时间。超过阈值的停顿、零间隙和重叠不会修改。
 
@@ -63,7 +63,7 @@ Codex 关闭后不能继续执行文本翻译；重新打开任务后从已保�
 
 ## CPU / GPU 检查与 Windows
 
-每次新任务先调用 `check_environment`。结果包含硬件/运行库检查、支持精度、实际选择及缺失依赖。默认优先可用的 MLX Metal，其次可用的 WhisperX CUDA，最后为 CPU。显式选定 CUDA 后若不可用会报错，不会静默退回 CPU；运行中显存不足或缺少 cuDNN/cuBLAS 同样会保留错误和任务快照。CPU 上自动选择运行库支持的 `int8` 等精度；MPS、DirectML 和 ROCm 未接入 WhisperX 路径。已有界面 CPU 设置保持原值，需将“运行设备”设为 `auto` 或 `cuda`，并将“计算精度”设为 `auto` 或支持的精度 才会改变桌面任务；MCP 默认自动探测，可用工具参数显式指定设备。
+每次新任务先调用 `check_environment`。结果包含硬件/运行库检查、支持精度、实际选择及缺失依赖。默认优先可用的 MLX Metal，其次可用的 WhisperX CUDA，最后为 CPU。显式选定 CUDA 后若不可用会报错，不会静默退回 CPU；运行中显存不足或缺少 cuDNN/cuBLAS 同样会保留错误和任务快照。CPU 上自动选择运行库支持的 `int8` 等精度；MPS、DirectML 和 ROCm 未接入 WhisperX 路径。已有界面 CPU 设置保持原值，需将“运行设备”设为 `auto` 或 `cuda`，并将“计算精度”设为 `auto` 或支持的精度才会改变桌面任务；MCP 默认自动探测，可用工具参数显式指定设备。
 
 WhisperX 的 GPU 依赖以 [WhisperX 官方安装说明](https://github.com/m-bain/whisperX#setup-)、[PyTorch 安装选择器](https://pytorch.org/get-started/locally/) 和 [CTranslate2 硬件支持](https://opennmt.net/CTranslate2/hardware_support.html) 为准。不要只凭 `nvidia-smi` 或显卡名称认定当前 Python 支持 CUDA。
 
