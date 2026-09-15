@@ -278,7 +278,7 @@ class MLXWhisperSettingWidget(QWidget):
             self.tr("选择"),
             FIF.FOLDER,
             self.tr("本地模型目录"),
-            self.tr("选择包含 config.json 和 weights.safetensors 的 MLX Whisper 模型目录"),
+            self.tr("选择包含 config.json 和权重文件的 MLX Whisper 模型目录"),
             self.setting_group,
         )
         self.model_status_card = PushSettingCard(
@@ -431,12 +431,12 @@ class MLXWhisperSettingWidget(QWidget):
         if not is_valid_local_mlx_model(folder):
             InfoBar.warning(
                 self.tr("模型目录不可用"),
-                self.tr("请选择包含 config.json 和 weights.safetensors 的目录。"),
+                self.tr("请选择包含 config.json 和权重文件（weights.safetensors 或 weights.npz）的目录。"),
                 duration=5000,
                 parent=self,
             )
             self.model_status_card.setContent(
-                self.tr("目录缺少 config.json 或 weights.safetensors")
+                self.tr("目录缺少 config.json 或权重文件（weights.safetensors / weights.npz）")
             )
             return
 

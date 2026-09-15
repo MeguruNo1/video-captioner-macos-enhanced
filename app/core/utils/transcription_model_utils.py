@@ -6,6 +6,7 @@ from app.core.entities import TranscribeConfig, TranscribeModelEnum
 from app.core.utils.mlx_model_utils import (
     REQUIRED_MLX_MODEL_FILES,
     is_local_model_reference,
+    is_valid_local_mlx_model,
     validate_mlx_model,
 )
 
@@ -44,8 +45,9 @@ def resolve_available_mlx_model(model: str | None) -> Path | None:
         return None
     if is_local_model_reference(value):
         path = Path(value).expanduser()
-        return path if _has_required_files(path, REQUIRED_MLX_MODEL_FILES) else None
-    return _cached_huggingface_snapshot(value, REQUIRED_MLX_MODEL_FILES)
+        return path if is_valid_local_mlx_model(path) else None
+    snapshot = _cached_huggingface_snapshot(value, REQUIRED_MLX_MODEL_FILES)
+    return snapshot if snapshot and is_valid_local_mlx_model(snapshot) else None
 
 
 def resolve_available_whisperx_model(config: TranscribeConfig) -> Path | None:
@@ -86,7 +88,7 @@ def validate_transcription_model_ready(
             return (
                 False,
                 "MLX Whisper 模型尚未下载完成。请先在模型设置中选择包含 "
-                "config.json 和 weights.safetensors 的本地模型目录",
+                "config.json 和权重文件（weights.safetensors 或 weights.npz）的本地模型目录",
             )
         return True, "MLX Whisper 模型可用"
 

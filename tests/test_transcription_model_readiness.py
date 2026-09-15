@@ -37,6 +37,23 @@ class TranscriptionModelReadinessTests(unittest.TestCase):
             ready, _ = model_utils.validate_transcription_model_ready(config)
             self.assertTrue(ready)
 
+    def test_mlx_npz_model_is_ready_locally_and_in_cache(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model_dir = Path(temp_dir)
+            (model_dir / "config.json").write_text("{}", encoding="utf-8")
+            config = TranscribeConfig(
+                transcribe_model=TranscribeModelEnum.MLX_WHISPER,
+                mlx_model=str(model_dir),
+            )
+            self.assertFalse(model_utils.validate_transcription_model_ready(config)[0])
+            (model_dir / "weights.npz").write_bytes(b"weights")
+            self.assertTrue(model_utils.validate_transcription_model_ready(config)[0])
+            config.mlx_model = "mlx-community/whisper-small-mlx"
+            with patch.object(model_utils, "_cached_huggingface_snapshot", return_value=model_dir):
+                self.assertTrue(model_utils.validate_transcription_model_ready(config)[0])
+                (model_dir / "weights.npz").unlink()
+                self.assertFalse(model_utils.validate_transcription_model_ready(config)[0])
+
     def test_uncached_remote_mlx_model_is_rejected_before_start(self):
         config = TranscribeConfig(
             transcribe_model=TranscribeModelEnum.MLX_WHISPER,

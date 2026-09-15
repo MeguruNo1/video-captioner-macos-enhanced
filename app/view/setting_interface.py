@@ -31,6 +31,7 @@ from app.common.signal_bus import signalBus
 from app.components.EditComboBoxSettingCard import EditComboBoxSettingCard
 from app.components.LineEditSettingCard import LineEditSettingCard
 from app.components.SpinBoxSettingCard import SpinBoxSettingCard
+from app.components.model_download_dialog import ModelDownloadDialog
 from app.config import AUTHOR, FEEDBACK_URL, HELP_URL, YEAR
 from app.core.entities import LLMServiceEnum, TranscribeModelEnum
 from app.core.subtitle_processor.prompt import (
@@ -428,6 +429,15 @@ class SettingInterface(ScrollArea):
             texts=[model.value for model in cfg.transcribe_model.validator.options],
             parent=self.transcribeGroup,
         )
+
+        self.modelDownloadCard = PushSettingCard(
+            self.tr("查看模型"),
+            FIF.DOWNLOAD,
+            self.tr("常用模型下载"),
+            self.tr("浏览 MLX Whisper、WhisperX 常用模型，跳转下载页面"),
+            self.transcribeGroup,
+        )
+        self.modelDownloadCard.clicked.connect(self.__showModelDownloadDialog)
 
         # LLM配置卡片
         self.__createLLMServiceCards()
@@ -990,6 +1000,7 @@ class SettingInterface(ScrollArea):
 
         # 添加转录配置卡片
         self.transcribeGroup.addSettingCard(self.transcribeModelCard)
+        self.transcribeGroup.addSettingCard(self.modelDownloadCard)
 
         # 添加LLM配置卡片
         self.llmGroup.addSettingCard(self.llmServiceCard)
@@ -1106,6 +1117,10 @@ class SettingInterface(ScrollArea):
     def __onThemeCardChanged(self, config_item):
         setTheme(cfg.get(config_item))
         self.__applyPageStyles()
+
+    def __showModelDownloadDialog(self):
+        dialog = ModelDownloadDialog(self.window(), cfg.transcribe_model.value)
+        dialog.exec_()
 
     def __showPromptCenterDialog(self):
         dialog = PromptCenterDialog(self)
