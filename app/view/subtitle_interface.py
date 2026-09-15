@@ -297,13 +297,13 @@ class SubtitleInterface(QWidget):
         self.translation_button.setMinimumWidth(160)
         self.translation_menu = RoundMenu(parent=self)
         self.translation_menu.setMaxVisibleItems(12)
-        self.translation_enabled_action = Action(
+        self.translation_disabled_action = Action(
             FIF.LANGUAGE,
-            self.tr("启用字幕翻译"),
-            triggered=self.on_subtitle_translation_changed,
+            self.tr("关闭字幕翻译"),
+            triggered=lambda checked: self.on_subtitle_translation_changed(False),
             checkable=True,
         )
-        self.translation_menu.addAction(self.translation_enabled_action)
+        self.translation_menu.addAction(self.translation_disabled_action)
         self.translation_menu.addSeparator()
         self.target_language_actions = []
         for lang in TargetLanguageEnum:
@@ -1335,9 +1335,9 @@ class SubtitleInterface(QWidget):
         """同步字幕翻译菜单与按钮标题"""
         enabled = cfg.need_translate.value
         target_language = cfg.target_language.value.value
-        self.translation_enabled_action.setChecked(enabled)
+        self.translation_disabled_action.setChecked(not enabled)
         for action in self.target_language_actions:
-            action.setChecked(action.text() == target_language)
+            action.setChecked(enabled and action.text() == target_language)
         if enabled:
             accent_color = self._theme_accent_color()
             self.translation_button.setIcon(
