@@ -3,6 +3,7 @@
 import datetime
 import os
 import sys
+from dataclasses import asdict
 from pathlib import Path
 
 from PyQt5.QtCore import *
@@ -38,7 +39,7 @@ from app.common.config import cfg
 from app.common.signal_bus import signalBus
 from app.components.LanguageSettingDialog import LanguageSettingDialog
 from app.components.transcription_setting_card import TranscriptionSettingCard
-from app.config import RESOURCE_PATH, WORK_PATH
+from app.config import APP_DATA_PATH, RESOURCE_PATH, WORK_PATH
 from app.core.entities import (
     SupportedAudioFormats,
     SupportedVideoFormats,
@@ -47,6 +48,7 @@ from app.core.entities import (
     VideoInfo,
 )
 from app.core.task_factory import TaskFactory
+from app.core.storage.page_state import file_signature, read_page_state, write_page_state
 from app.core.utils.desktop_notification import send_desktop_notification
 
 DEFAULT_THUMBNAIL_PATH = RESOURCE_PATH / "assets" / "default_thumbnail.jpg"
@@ -166,6 +168,9 @@ class VideoInfoCard(CardWidget):
         else:
             self.start_button.setEnabled(True)
         self.update_thumbnail(video_info.thumbnail_path)
+        if self.transcription_interface:
+            self.transcription_interface._media_signature = file_signature(video_info.file_path)
+            self.transcription_interface._save_transcription_state()
 
     def update_thumbnail(self, thumbnail_path):
         """更新视频缩略图"""
@@ -236,6 +241,8 @@ class VideoInfoCard(CardWidget):
         self.transcript_thread.finished.connect(self.on_transcript_finished)
         self.transcript_thread.progress.connect(self.on_transcript_progress)
         self.transcript_thread.error.connect(self.on_transcript_error)
+        self.transcription_interface._transcription_status = "processing"
+        self.transcription_interface._save_transcription_state()
         self.transcript_thread.start()
         return True
 
@@ -258,6 +265,7 @@ class VideoInfoCard(CardWidget):
         """更新转录进度"""
         self.start_button.setText(message)
         self.progress_ring.setValue(value)
+        self.transcription_interface._save_transcription_state()
 
     def on_transcript_error(self, error):
         """处理转录错误"""
@@ -268,6 +276,8 @@ class VideoInfoCard(CardWidget):
         self.progress_ring.setValue(0)
         self.start_button.setEnabled(True)
         self.start_button.setText(self.tr("重新转录"))
+        self.transcription_interface._transcription_status = "interrupted"
+        self.transcription_interface._save_transcription_state()
         InfoBar.error(
             self.tr("转录失败"),
             self.tr(error),
@@ -307,6 +317,7 @@ class TranscriptionInterface(QWidget):
 
     finished = pyqtSignal(str, str)
     send_to_translate = pyqtSignal(str, str)
+    TRANSCRIPTION_STATE_PATH = APP_DATA_PATH / "transcription_state.json"
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -315,12 +326,76 @@ class TranscriptionInterface(QWidget):
         self.setAcceptDrops(True)
         self.task = None
         self.is_processing = False
+        self._transcription_status = "ready"
+        self._restoring_state = False
+        self._media_signature = None
 
         self._init_ui()
         self._setup_signals()
         self._set_value()
         cfg.themeMode.valueChanged.connect(lambda *_: self._apply_theme_styles())
         self._apply_theme_styles()
+        self._restore_transcription_state()
+        QApplication.instance().aboutToQuit.connect(self._save_transcription_state)
+
+    def _save_transcription_state(self):
+        if self._restoring_state:
+            return
+        card = self.video_info_card
+        info = card.video_info
+        if not info:
+            return
+        task = card.task or self.task
+        write_page_state(self.TRANSCRIPTION_STATE_PATH, {
+            "media": asdict(info),
+            "signature": self._media_signature,
+            "status": self._transcription_status,
+            "progress": card.progress_ring.value(),
+            "output_path": task.output_path if task else None,
+        })
+
+    def _restore_transcription_state(self):
+        payload = read_page_state(self.TRANSCRIPTION_STATE_PATH)
+        try:
+            info = VideoInfo(**payload["media"])
+            if not all(isinstance(getattr(info, key), str) for key in ("file_path", "file_name", "thumbnail_path")):
+                return
+            if not isinstance(info.duration_seconds, (int, float)) or not 0 <= info.duration_seconds < 10**9:
+                return
+            signature = file_signature(info.file_path)
+            if not signature or signature != payload.get("signature"):
+                return
+            progress = max(0, min(100, int(payload.get("progress", 0))))
+            output_path = payload.get("output_path")
+            if payload.get("status") not in ("ready", "processing", "interrupted", "completed"):
+                return
+            if output_path is not None and not isinstance(output_path, str):
+                return
+        except (TypeError, ValueError, KeyError, OverflowError):
+            return
+        self._restoring_state = True
+        try:
+            self.video_info_card.update_info(info)
+            self._transcription_status = payload.get("status", "ready")
+            if self._transcription_status == "completed" and output_path and Path(output_path).is_file():
+                self.task = TranscribeTask(file_path=info.file_path, output_path=output_path)
+                self.video_info_card.task = self.task
+                self.video_info_card.start_button.setText(self.tr("转录完成"))
+                self._set_translation_handoff_enabled(True)
+            elif self._transcription_status in {"processing", "interrupted"}:
+                self._transcription_status = "interrupted"
+                self.video_info_card.start_button.setText(self.tr("重新转录"))
+                self.video_info_card.start_button.setToolTip(
+                    self.tr("已恢复上次媒体和进度；点击后重新执行转录")
+                )
+            elif self._transcription_status == "completed":
+                self._transcription_status = "ready"
+                progress = 0
+                self.video_info_card.start_button.setToolTip(self.tr("原字幕文件不存在，请重新转录"))
+            self.video_info_card.progress_ring.setValue(progress)
+            self.video_info_card.progress_ring.setVisible(progress > 0)
+        finally:
+            self._restoring_state = False
 
     def _init_ui(self):
         """初始化UI"""
@@ -479,6 +554,11 @@ class TranscriptionInterface(QWidget):
         """转录完成处理"""
         self.is_processing = False
         self.task = task
+        self.video_info_card.task = task
+        self._transcription_status = "completed"
+        self.video_info_card.progress_ring.setValue(100)
+        self.video_info_card.progress_ring.hide()
+        self._save_transcription_state()
         self._set_translation_handoff_enabled(True)
         send_desktop_notification(
             self.tr("转录完成"),
@@ -546,6 +626,16 @@ class TranscriptionInterface(QWidget):
         """清理旧任务，避免新文件复用上一份转录结果。"""
         self.task = None
         self.video_info_card.task = None
+        self.video_info_card.video_info = None
+        self._media_signature = None
+        self._transcription_status = "ready"
+        self.video_info_card.progress_ring.hide()
+        self.video_info_card.progress_ring.setValue(0)
+        self.video_info_card.start_button.setToolTip("")
+        try:
+            self.TRANSCRIPTION_STATE_PATH.unlink(missing_ok=True)
+        except OSError:
+            pass
         self.video_info_card.start_button.setEnabled(False)
         self.video_info_card.start_button.setText(self.tr("开始转录"))
         self._set_translation_handoff_enabled(False)
@@ -562,6 +652,8 @@ class TranscriptionInterface(QWidget):
         """设置UI"""
         from app.thread.video_info_thread import VideoInfoThread
 
+        if self.video_info_card.video_info and self.video_info_card.video_info.file_path != file_path:
+            self._clear_current_task()
         self.video_info_thread = VideoInfoThread(file_path)
         self.video_info_thread.finished.connect(self.video_info_card.update_info)
         self.video_info_thread.error.connect(self._on_video_info_error)
@@ -574,9 +666,12 @@ class TranscriptionInterface(QWidget):
 
     def set_task(self, task: TranscribeTask):
         """设置任务并更新UI"""
+        self._clear_current_task()
         self.task = task
         self.video_info_card.set_task(self.task)
         output_path = Path(task.output_path) if task.output_path else None
+        if output_path and output_path.is_file():
+            self._transcription_status = "completed"
         self._set_translation_handoff_enabled(
             bool(output_path and output_path.exists())
         )
@@ -635,6 +730,7 @@ class TranscriptionInterface(QWidget):
                 )
 
     def closeEvent(self, event):
+        self._save_transcription_state()
         self.video_info_card.stop()
         super().closeEvent(event)
 

@@ -1,4 +1,5 @@
 import os
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -6,7 +7,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QCoreApplication, QEvent, Qt
 from PyQt5.QtGui import QPalette
 from PyQt5.QtWidgets import QApplication
 
@@ -18,6 +19,16 @@ class WorkspaceUxStateTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        for page, field in ((TranscriptionInterface, "TRANSCRIPTION_STATE_PATH"),
+                            (SubtitleInterface, "SUBTITLE_STATE_PATH")):
+            patcher = patch.object(page, field, Path(temporary.name) / (field + ".json"))
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.addCleanup(lambda: QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete))
 
     def test_transcription_handoff_waits_for_generated_subtitles(self):
         interface = TranscriptionInterface()

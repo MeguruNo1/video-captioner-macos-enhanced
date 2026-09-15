@@ -6,7 +6,7 @@ import tempfile
 import json
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, QTime, QUrl, QAbstractTableModel, QEvent, pyqtSignal
+from PyQt5.QtCore import Qt, QTime, QUrl, QAbstractTableModel, QEvent, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QDragEnterEvent, QDropEvent, QPalette
 from PyQt5.QtWidgets import (
     QAbstractItemView,
@@ -38,6 +38,7 @@ from qfluentwidgets import (
 
 from app.common.config import cfg
 from app.common.signal_bus import signalBus
+from app.config import APP_DATA_PATH
 from app.components.SubtitleSettingDialog import SubtitleSettingDialog
 from app.core.bk_asr.asr_data import ASRData
 from app.core.entities import (
@@ -47,6 +48,7 @@ from app.core.entities import (
     TargetLanguageEnum,
 )
 from app.core.task_factory import TaskFactory
+from app.core.storage.page_state import file_signature, read_page_state, write_page_state
 from app.core.utils.desktop_notification import send_desktop_notification
 from app.view.setting_interface import PromptCenterDialog
 
@@ -177,6 +179,7 @@ class SubtitleTableModel(QAbstractTableModel):
 class SubtitleInterface(QWidget):
     finished = pyqtSignal(str, str)
     COMPACT_LAYOUT_WIDTH = 760
+    SUBTITLE_STATE_PATH = APP_DATA_PATH / "subtitle_state.json"
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -184,6 +187,13 @@ class SubtitleInterface(QWidget):
         self.setAcceptDrops(True)
         self.task = None
         self.subtitle_path = None
+        self._subtitle_status = "ready"
+        self._restoring_state = False
+        self._subtitle_signature = None
+        self._state_timer = QTimer(self)
+        self._state_timer.setSingleShot(True)
+        self._state_timer.setInterval(250)
+        self._state_timer.timeout.connect(self._save_subtitle_state)
         self.custom_prompt_text = cfg.custom_prompt_text.value
         self.setAttribute(Qt.WA_DeleteOnClose)
         self._init_ui()
@@ -195,6 +205,89 @@ class SubtitleInterface(QWidget):
         cfg.themeColor.valueChanged.connect(lambda *_: self._apply_theme_styles())
         self._apply_theme_styles()
         self._adjust_responsive_layout()
+        self.original_model.dataChanged.connect(self._schedule_state_save)
+        self.translation_model.dataChanged.connect(self._schedule_state_save)
+        self._restore_subtitle_state()
+        QApplication.instance().aboutToQuit.connect(self._save_subtitle_state)
+
+    def _schedule_state_save(self, *_args):
+        if not self._restoring_state:
+            self._state_timer.start()
+
+    def _save_subtitle_state(self):
+        self._state_timer.stop()
+        if self._restoring_state or not self.subtitle_path:
+            return
+        write_page_state(self.SUBTITLE_STATE_PATH, {
+            "subtitle_path": str(self.subtitle_path),
+            "signature": self._subtitle_signature,
+            "video_path": getattr(self.task, "video_path", None),
+            "output_path": getattr(self.task, "output_path", None),
+            "data": self.model._data,
+            "status": self._subtitle_status,
+            "progress": self.progress_bar.value(),
+            "message": self.status_label.text(),
+            "detail": self.status_label.toolTip(),
+            "log": self.log_text.toPlainText(),
+        })
+
+    def _restore_subtitle_state(self):
+        payload = read_page_state(self.SUBTITLE_STATE_PATH)
+        try:
+            path = payload["subtitle_path"]
+            if not isinstance(path, str) or not path:
+                return
+            signature = file_signature(path)
+            # Keep an editable draft when the source was moved or deleted, but
+            # never associate it with a different file at the same path.
+            if signature and signature != payload.get("signature"):
+                return
+            data = payload["data"]
+            if not isinstance(data, dict):
+                return
+            for index, (key, segment) in enumerate(data.items(), 1):
+                if key != str(index) or not isinstance(segment, dict):
+                    return
+                if not all(isinstance(segment.get(k), int) for k in ("start_time", "end_time")):
+                    return
+                if not all(isinstance(segment.get(k, ""), str) for k in ("original_subtitle", "translated_subtitle")):
+                    return
+            progress = max(0, min(100, int(payload.get("progress", 0))))
+            if payload.get("status") not in ("ready", "processing", "interrupted", "completed"):
+                return
+            if any(payload.get(key) is not None and not isinstance(payload[key], str)
+                   for key in ("video_path", "output_path", "message", "detail", "log")):
+                return
+        except (KeyError, ValueError, TypeError, OverflowError):
+            return
+        self._restoring_state = True
+        try:
+            self.subtitle_path = path
+            self._subtitle_signature = payload.get("signature")
+            self.task = SubtitleTask(
+                subtitle_path=path, video_path=payload.get("video_path"),
+                output_path=payload.get("output_path"), need_next_task=False,
+            )
+            self._set_subtitle_data(data)
+            self._subtitle_status = payload.get("status", "ready")
+            self.start_button.setEnabled(bool(signature))
+            self.save_button.setEnabled(bool(data))
+            self.save_button.setToolTip(self.tr("保存字幕"))
+            self.start_button.setToolTip(self.tr("重新处理当前字幕文件；已有编辑可先保存"))
+            self.progress_bar.setValue(progress)
+            self.status_label.setToolTip(payload.get("detail") or "")
+            self.log_text.setPlainText(payload.get("log") or "")
+            if not signature:
+                self.status_label.setText(self.tr("已恢复字幕草稿，原文件不存在，请先保存字幕"))
+            elif self._subtitle_status in {"processing", "interrupted"}:
+                self._subtitle_status = "interrupted"
+                self.start_button.setText(self.tr("重试"))
+                self.status_label.setText(self.tr("已恢复字幕和进度，点击重试重新处理"))
+            else:
+                self.start_button.setText(self.tr("再次处理") if self._subtitle_status == "completed" else self.tr("开始"))
+                self.status_label.setText(self.tr("已恢复上次字幕工作区"))
+        finally:
+            self._restoring_state = False
 
     @staticmethod
     def _extract_supported_subtitle_paths(urls):
@@ -816,6 +909,7 @@ class SubtitleInterface(QWidget):
         self.translation_model.update_all(data)
         self.model = self.translation_model
         self._update_full_script_button_state()
+        self._schedule_state_save()
 
     def append_task_log(self, message: str):
         message = str(message or "").strip()
@@ -834,8 +928,14 @@ class SubtitleInterface(QWidget):
         self.save_button.setEnabled(True)
         self.save_button.setToolTip(self.tr("保存字幕"))
         self.task = task
+        self._subtitle_status = "ready"
+        self.progress_bar.setValue(0)
+        self.status_label.setToolTip("")
+        self.log_text.clear()
         self.subtitle_path = task.subtitle_path
+        self._subtitle_signature = file_signature(self.subtitle_path)
         self.update_info(task)
+        self._save_subtitle_state()
 
     def update_info(self, task: SubtitleTask):
         """更新页面信息"""
@@ -861,7 +961,10 @@ class SubtitleInterface(QWidget):
         self.append_task_log(self.tr("开始字幕处理"))
 
         if need_create_task:
-            self.task = TaskFactory.create_subtitle_task(file_path=self.subtitle_path)
+            self.task = TaskFactory.create_subtitle_task(
+                file_path=self.subtitle_path,
+                video_path=getattr(self.task, "video_path", None),
+            )
         elif self.task and self.task.subtitle_config:
             self.task.subtitle_config.need_mask_original_profanity = (
                 cfg.need_mask_original_profanity.value
@@ -886,6 +989,8 @@ class SubtitleInterface(QWidget):
         self.subtitle_optimization_thread.set_custom_prompt_text(
             self.custom_prompt_text
         )
+        self._subtitle_status = "processing"
+        self._save_subtitle_state()
         self.subtitle_optimization_thread.start()
 
     def process(self):
@@ -901,11 +1006,14 @@ class SubtitleInterface(QWidget):
         self.progress_bar.setValue(100)
         self.status_label.setText(self.tr("处理完成"))
         self.status_label.setToolTip(str(output_path))
+        self.task.output_path = output_path
+        self._subtitle_status = "completed"
         if self.task.need_next_task:
             self.finished.emit(video_path, output_path)
         self.append_task_log(
             self.tr("任务完成: ") + output_path + self._format_token_usage_log_suffix()
         )
+        self._save_subtitle_state()
         InfoBar.success(
             self.tr("优化完成"),
             self.tr("优化完成字幕..."),
@@ -928,6 +1036,8 @@ class SubtitleInterface(QWidget):
         self.status_label.setText(self.tr("处理失败"))
         self.status_label.setToolTip(str(error))
         self.append_task_log(self.tr("错误: ") + str(error))
+        self._subtitle_status = "interrupted"
+        self._save_subtitle_state()
         InfoBar.error(self.tr("优化失败"), self.tr(error), duration=20000, parent=self)
         send_desktop_notification(
             self.tr("字幕处理失败"),
@@ -939,6 +1049,7 @@ class SubtitleInterface(QWidget):
         self.progress_bar.setValue(value)
         self.status_label.setText(status)
         self.append_task_log(status)
+        self._schedule_state_save()
 
     def on_subtitle_token_progress(self, status):
         self.status_label.setText(status)
@@ -1047,8 +1158,14 @@ class SubtitleInterface(QWidget):
             )
 
     def load_subtitle_file(self, file_path):
-        self.subtitle_path = file_path
         asr_data = ASRData.from_subtitle_file(file_path)
+        self.subtitle_path = file_path
+        self._subtitle_signature = file_signature(file_path)
+        self.task = None
+        self._subtitle_status = "ready"
+        self.progress_bar.setValue(0)
+        self.status_label.setToolTip("")
+        self.log_text.clear()
         self._set_subtitle_data(asr_data.to_json())
         self.start_button.setEnabled(True)
         self.start_button.setText(self.tr("开始"))
@@ -1057,6 +1174,7 @@ class SubtitleInterface(QWidget):
         self.save_button.setToolTip(self.tr("保存字幕"))
         self.status_label.setText(self.tr("已加载文件"))
         self.append_task_log(self.tr("已加载字幕: ") + os.path.basename(file_path))
+        self._save_subtitle_state()
 
     def dragEnterEvent(self, event: QDragEnterEvent):
         files = self._extract_supported_subtitle_paths(event.mimeData().urls())
@@ -1120,6 +1238,7 @@ class SubtitleInterface(QWidget):
         return super().eventFilter(obj, event)
 
     def closeEvent(self, event):
+        self._save_subtitle_state()
         if hasattr(self, "subtitle_optimization_thread"):
             self.subtitle_optimization_thread.stop()
         super().closeEvent(event)
@@ -1300,6 +1419,8 @@ class SubtitleInterface(QWidget):
             self.progress_bar.setValue(0)
             self.status_label.setText(self.tr("已取消校正"))
             self.append_task_log(self.tr("任务已取消"))
+            self._subtitle_status = "interrupted"
+            self._save_subtitle_state()
             InfoBar.warning(
                 self.tr("已取消"), self.tr("字幕校正已取消"), duration=3000, parent=self
             )
