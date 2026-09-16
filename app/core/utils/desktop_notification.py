@@ -132,6 +132,8 @@ def _request_mac_notification_authorization(center, wait: bool = False) -> bool 
 
 def request_desktop_notification_authorization() -> bool:
     if not IS_MACOS:
+        if QApplication.instance() is None:
+            return False
         return QSystemTrayIcon.isSystemTrayAvailable() and QSystemTrayIcon.supportsMessages()
     center = _ensure_mac_notification_center()
     if center is None:

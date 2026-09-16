@@ -103,6 +103,21 @@ class DesktopNotificationTests(unittest.TestCase):
                 desktop_notification.request_desktop_notification_authorization()
             )
 
+    def test_non_macos_authorization_without_qapplication_is_safe(self):
+        with patch.object(desktop_notification, "IS_MACOS", False), patch.object(
+            desktop_notification.QApplication,
+            "instance",
+            return_value=None,
+        ), patch.object(
+            desktop_notification.QSystemTrayIcon,
+            "isSystemTrayAvailable",
+        ) as tray_available:
+            self.assertFalse(
+                desktop_notification.request_desktop_notification_authorization()
+            )
+
+        tray_available.assert_not_called()
+
     def test_status_reports_disabled_when_config_is_off(self):
         with patch.object(desktop_notification.cfg, "get", return_value=False):
             status = desktop_notification.get_desktop_notification_status()
