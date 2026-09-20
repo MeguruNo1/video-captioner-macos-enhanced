@@ -8,6 +8,7 @@
 # === Source code (tracked) ===
 !/.gitignore
 !/README.md
+!/Agent.md
 !/README.en.md
 !/README-macos-whisperx.md
 !/main.py
