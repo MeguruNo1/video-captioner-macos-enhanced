@@ -3,11 +3,11 @@ import re
 from pathlib import Path
 from uuid import uuid4
 
+from app.core.utils.platform_utils import IS_MACOS, app_data_dir
 from app.core.utils.transcript_terms import extract_glossary_pairs
 
 AUTO_BEGIN = "<!-- VIDEOCAPTIONER_MCP_TERMS_BEGIN -->"
 AUTO_END = "<!-- VIDEOCAPTIONER_MCP_TERMS_END -->"
-from app.core.utils.platform_utils import IS_MACOS, app_data_dir
 
 DEFAULT_GLOSSARY_PATH = (Path.home() / "Library/Mobile Documents/iCloud~md~obsidian/Documents/Note/Translate/对照.md"
                          if IS_MACOS else app_data_dir("VideoCaptioner") / "glossary.md")

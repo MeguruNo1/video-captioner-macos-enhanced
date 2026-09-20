@@ -1,6 +1,5 @@
 import logging
 import os
-import sys
 from pathlib import Path
 
 from app.core.utils.platform_utils import app_data_dir, default_work_dir, bundled_bin_dir

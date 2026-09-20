@@ -1,6 +1,5 @@
 """Persistent local job orchestration. The MCP client supplies all translations."""
 import importlib.util
-import json
 import os
 from pathlib import Path
 import shutil
