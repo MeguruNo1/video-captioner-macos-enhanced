@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, QThread, QUrl, pyqtSignal
+from PyQt5.QtCore import QEvent, Qt, QThread, QUrl, pyqtSignal
 from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtWidgets import QApplication, QFileDialog, QLabel, QSizePolicy, QWidget
 from qfluentwidgets import ComboBoxSettingCard, CustomColorSettingCard, ExpandLayout
@@ -357,6 +357,8 @@ class SettingInterface(ScrollArea):
 
     def __init__(self, parent=None):
         super().__init__(parent=parent)
+        # Run before Fluent's angle-only wheel filter on macOS trackpads.
+        self.viewport().installEventFilter(self)
         self._cookie_export_in_progress = False
         self.setWindowTitle(self.tr("设置"))
         self.scrollWidget = QWidget()
@@ -374,6 +376,16 @@ class SettingInterface(ScrollArea):
         # 连接信号和槽
         self.__connectSignalToSlot()
         cfg.themeMode.valueChanged.connect(lambda *_: self.__applyPageStyles())
+
+    def eventFilter(self, obj, event):
+        if obj is self.viewport() and event.type() == QEvent.Wheel:
+            delta = event.pixelDelta().y()
+            if delta:
+                bar = self.verticalScrollBar()
+                bar.setValue(bar.value() - delta)
+                event.accept()
+                return True
+        return super().eventFilter(obj, event)
 
     def showEvent(self, event):
         super().showEvent(event)
