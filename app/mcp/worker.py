@@ -34,14 +34,23 @@ class Worker:
         return self.update(status=name, stage=name, progress=progress, message=message)
 
     def transcribe(self, path, options, prompt=None):
+        from app.core.utils.proxy_utils import apply_download_proxy_environment
+        proxy = options.get("proxy_url")
+        apply_download_proxy_environment("手动设置" if proxy else "不使用代理", proxy or "")
         initial_prompt = options["initial_prompt"] if prompt is None else prompt
         language = None if options["source_language"] == "auto" else options["source_language"]
         backend = options.get("backend", "mlx")  # Existing jobs retain MLX/native timestamps.
+        alignment = options.get("alignment", {})
+        from .settings import check_alignment_snapshot
+        check_alignment_snapshot(alignment)
         if backend == "mlx":
             from app.core.bk_asr.mlx_whisper import MLXWhisperASR, build_mlx_initial_prompt
             asr = MLXWhisperASR(str(path), model=options["model"], language=language,
                                initial_prompt=build_mlx_initial_prompt(initial_prompt, options.get("mlx_hotwords")),
-                               need_word_time_stamp=True, alignment_method="native", use_cache=False,
+                               need_word_time_stamp=True, alignment_method=alignment.get("method", "native"), use_cache=False,
+                               align_device=alignment.get("device", "cpu"),
+                               align_model_dir=alignment.get("model_dir"),
+                               align_inherit_proxy_environment=True,
                                vad_enabled=options["vad_enabled"],
                                vad_threshold=options.get("vad_threshold", 0.5),
                                chunk_duration=options.get("chunk_duration", 600),
@@ -56,11 +65,13 @@ class Worker:
                               vad_method=options.get("vad_method", "silero"),
                               vad_threshold=options.get("vad_threshold", 0.5),
                               local_silero_dir=options.get("local_silero_dir", ""),
-                              model_dir=str(app_data_dir("VideoCaptioner") / "models"),
+                              model_dir=alignment.get("model_dir") or str(app_data_dir("VideoCaptioner") / "models"),
                               align=True, need_word_time_stamp=True, use_cache=False)
         else:
             raise ValueError(f"Unknown saved ASR backend: {backend}")
-        return asr._run(lambda progress, message: self.update(progress=progress, message=message))
+        result = asr._run(lambda progress, message: self.update(progress=progress, message=message))
+        result["alignment_policy"] = alignment
+        return result
 
     def run(self):
         with file_lock(self.store.path(self.job_id).with_suffix(".worker.lock"), blocking=False):
@@ -133,7 +144,10 @@ class Worker:
             self.stage("waiting_for_asr", message=f"Waiting for local {backend} worker slot")
             with file_lock(self.store.root / f"{backend}.lock"):
                 # Cancellation while waiting is handled by the worker's SIGTERM.
-                if state.get("retranscribe"):
+                if state.get("realign"):
+                    self.realign(state, directory, audio)
+                    options = self.store.read(self.job_id)["options"]
+                elif state.get("retranscribe"):
                     self.retranscribe(state, directory, audio, options)
                 elif not state["words"]:
                     self.stage("transcribing", message=f"Transcribing with local {backend} / {options.get('device', 'metal')}")
@@ -142,6 +156,8 @@ class Worker:
                     if raw_path.exists():
                         try:
                             result = json.loads(raw_path.read_text(encoding="utf-8"))
+                            if result.get("alignment_policy", {}) != options.get("alignment", {}):
+                                raise ValueError("Saved transcript has a different alignment policy")
                             words = words_from_result(result)
                         except (ValueError, KeyError):
                             pass
@@ -154,14 +170,44 @@ class Worker:
                     self.update(words=words, batches=make_batches(words))
             # Record import isolation as useful diagnostic evidence.
             forbidden = [name for name in sys.modules if name.startswith("PyQt5") or name == "openai" or name.startswith("openai.")
-                         or (backend == "mlx" and (name == "whisperx" or name.startswith("whisperx.") or name == "app.core.bk_asr.whisper_x_auto"))]
+                         or (backend == "mlx" and options.get("alignment", {}).get("method", "native") == "native" and (name == "whisperx" or name.startswith("whisperx.") or name == "app.core.bk_asr.whisper_x_auto"))]
             atomic_json(directory / "runtime.json", {"asr": backend,
                         "device": options.get("device", "metal"), "compute_type": options.get("compute_type", "model"),
-                        "alignment": "native" if backend == "mlx" else "whisperx", "unexpected_modules": forbidden})
+                        "alignment": options.get("alignment", {"method": "native" if backend == "mlx" else "whisperx"}), "unexpected_modules": forbidden})
             if forbidden:
                 raise RuntimeError("Headless worker imported an unexpected GUI/API or unrelated ASR module: " + ", ".join(forbidden))
             self.update(status="awaiting_captions", stage="awaiting_captions", progress=100,
                         message="Transcription saved. Codex can now process caption batches.", worker=None)
+
+    def realign(self, state, directory, audio):
+        from .alignment import alignment_segments, reanchor_alignment, remove_alignment_context
+        from app.core.bk_asr.whisper_x_auto import align_transcription_with_whisperx
+        from app.core.utils.proxy_utils import apply_download_proxy_environment
+        self.stage("transcribing", message="Aligning existing words; preserving translations")
+        policy = state["realign"]["alignment"]
+        from .settings import check_alignment_snapshot
+        check_alignment_snapshot(policy)
+        language = state["options"]["source_language"]
+        if language == "auto":
+            raw = json.loads((directory / "transcript-original.json").read_text(encoding="utf-8"))
+            language = raw.get("language")
+        if not language:
+            raise ValueError("Cannot align without a detected source language")
+        proxy = state["options"].get("proxy_url")
+        apply_download_proxy_environment("手动设置" if proxy else "不使用代理", proxy or "")
+        run_id = uuid4().hex
+        atomic_json(directory / f"alignment-before-{run_id}.json", state)
+        segments = alignment_segments(state)
+        result = align_transcription_with_whisperx(
+            str(audio), segments, language,
+            device=policy["device"], model_dir=policy["model_dir"], inherit_proxy_environment=True)
+        result["alignment_policy"] = policy
+        atomic_json(directory / f"alignment-result-{run_id}.json", result)
+        candidate = reanchor_alignment(state, remove_alignment_context(result, segments))
+        options = dict(state["options"], alignment=policy)
+        options["workflow_settings"] = dict(options.get("workflow_settings", {}), alignment=policy)
+        self.update(words=candidate["words"], batches=candidate["batches"], options=options,
+                    revision=state["revision"] + 1, artifacts={}, realign=None)
 
     def retranscribe(self, state, directory, audio, options):
         from app.core.bk_asr.mlx_workflow import extract_audio_chunk

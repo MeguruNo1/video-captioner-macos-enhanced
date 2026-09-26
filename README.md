@@ -130,6 +130,8 @@ scripts/setup_youtube_pot_provider.sh
 
 新增本地 MCP + Skill 接入：提供视频链接，由硬件适配的本地 MLX / WhisperX 转录、当前 Codex 校对断句与翻译；按视频名建立任务目录，输出最终视频、原文/中文字幕、原文文稿及模板简介。最高画质下载遇到 VP9/AV1 时自动转为 HEVC，无需电脑操控或独立翻译 API。支持任务恢复和局部重转录。安装与使用见 [Codex MCP 指南](docs/codex-mcp.md)。
 
+新建 MLX 字幕任务会在 Metal 识别后使用本地 WhisperX CPU 独立对齐时间；旧任务可通过 `realign_job` 保留译文并重新对齐。
+
 ### MCP、Skill 和 Codex 分别做什么
 
 - **MCP**（Model Context Protocol，模型上下文协议）：提供本机下载、转录、任务恢复和字幕导出工具。

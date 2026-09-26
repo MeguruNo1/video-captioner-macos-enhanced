@@ -76,3 +76,29 @@ def workflow_settings_snapshot(settings):
             "custom_prompt_text": str(subtitle.get("CustomPromptText") or ""),
         },
     }
+
+
+def alignment_snapshot(backend, device="cpu"):
+    """Pin the alignment policy for new jobs; absent snapshots remain legacy."""
+    from importlib.metadata import version, PackageNotFoundError
+    try:
+        package_version = version("whisperx")
+    except PackageNotFoundError:
+        package_version = None
+    return {"method": "whisperx", "version": 1,
+            "device": "cpu" if backend == "mlx" else device,
+            "model_dir": str(app_data_dir("VideoCaptioner") / "models"),
+            "model_selection": "language-default", "whisperx_version": package_version}
+
+
+def check_alignment_snapshot(policy):
+    """Do not silently resume a task with a different alignment implementation."""
+    if not policy:
+        return
+    if policy.get("method") != "whisperx" or policy.get("version", 1) != 1:
+        raise ValueError("Unsupported saved alignment policy; explicit migration is required")
+    expected = policy.get("whisperx_version")
+    if expected:
+        from importlib.metadata import version
+        if version("whisperx") != expected:
+            raise ValueError("WhisperX version differs from the saved alignment policy; restore that version or explicitly migrate the task")

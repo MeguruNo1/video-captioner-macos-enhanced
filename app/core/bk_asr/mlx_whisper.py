@@ -68,10 +68,12 @@ class MLXWhisperASR(BaseASR):
         align_device: str = "cpu",
         align_model_dir: str | None = None,
         alignment_method: str = "whisperx",
+        align_inherit_proxy_environment: bool = False,
     ):
         if alignment_method not in {"whisperx", "native"}:
             raise ValueError("alignment_method must be whisperx or native")
         self.alignment_method = alignment_method
+        self.align_inherit_proxy_environment = align_inherit_proxy_environment
         super().__init__(audio_path, use_cache)
         self.model = model or DEFAULT_MLX_MODEL
         self.language = language or None
@@ -131,8 +133,7 @@ class MLXWhisperASR(BaseASR):
             audio_path,
             path_or_hf_repo=self.model,
             language=self.language,
-            # Preserve GUI forced alignment; headless jobs explicitly opt into
-            # native MLX word timestamps and validate their timing downstream.
+            # Legacy tasks can explicitly retain native timestamps.
             word_timestamps=self.need_word_time_stamp and self.alignment_method == "native",
             initial_prompt=self.initial_prompt or None,
             **({"condition_on_previous_text": False} if self.alignment_method == "native" else {}),
@@ -237,9 +238,10 @@ class MLXWhisperASR(BaseASR):
                 result = align_transcription_with_whisperx(
                     self.audio_path,
                     alignment_segments,
-                    self.language,
+                    self.language or result.get("language"),
                     device=self.align_device,
                     model_dir=self.align_model_dir,
+                    **({"inherit_proxy_environment": True} if self.align_inherit_proxy_environment else {}),
                 )
             callback(100, "MLX Whisper finished")
             return result

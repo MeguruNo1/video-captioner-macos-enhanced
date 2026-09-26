@@ -130,6 +130,8 @@ It requires Node.js 20+, npm and Git, installs the provider under `~/Library/App
 
 A local MCP server and Skill can download a video, transcribe with hardware-selected local MLX / WhisperX, and let the current Codex conversation proofread, segment, and translate captions. Each task uses a video-title directory and exports the final video, source/translated SRT, a proofread source transcript, and a template description. Highest-quality VP9/AV1 downloads are converted to HEVC. Jobs are resumable and support local re-transcription; no computer control or separate translation API is used. See the [Codex MCP guide](docs/codex-mcp.md).
 
+New MLX caption jobs use local WhisperX CPU alignment after Metal transcription. Existing jobs can use `realign_job` to realign timing while preserving translations.
+
 ### Roles of MCP, the Skill, and Codex
 
 - **MCP** (Model Context Protocol) exposes local tools for downloading, transcription, recovery, and export.

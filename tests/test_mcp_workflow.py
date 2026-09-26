@@ -13,7 +13,7 @@ import psutil
 import pytest
 from PIL import Image
 
-from app.mcp.captions import anchor_captions, fill_short_display_gaps, make_batches, validate, words_from_result
+from app.mcp.captions import anchor_captions, make_batches, validate, words_from_result
 from app.mcp.jobs import JobManager, owned_process
 from app.mcp.store import atomic_json
 from app.mcp.worker import Worker, Revoked
@@ -52,18 +52,6 @@ def payload(batch):
              "source": "Hello world. Good morning.", "translation": "你好，世界。早上好。"}]
 
 
-def test_fill_short_display_gaps_uses_half_second_boundary():
-    captions = [
-        {"start_ms": 0, "end_ms": 1000, "source": "A", "translation": "甲"},
-        {"start_ms": 1500, "end_ms": 2000, "source": "B", "translation": "乙"},
-        {"start_ms": 2501, "end_ms": 3000, "source": "C", "translation": "丙"},
-    ]
-    result = fill_short_display_gaps(captions)
-    assert result[0]["end_ms"] == 1500
-    assert result[1]["end_ms"] == 2000
-    assert captions[0]["end_ms"] == 1000
-
-
 def test_complete_export_and_exact_retry(job):
     manager, job_id = job
     batch = manager.get_caption_batch(job_id)
@@ -75,7 +63,7 @@ def test_complete_export_and_exact_retry(job):
     assert result["exported"]
     original = Path(result["artifacts"]["【字幕】「Sample Video」原文.srt"]).read_text()
     translated = Path(result["artifacts"]["【字幕】「Sample Video」译文.srt"]).read_text()
-    assert "00:00:00,000 --> 00:00:01,900" in original
+    assert "00:00:00,000 --> 00:00:02,100" in original
     assert "Hello world. Good morning." in original
     assert "你好，世界。早上好。" in translated
     output = Path(manager.get_job(job_id)["directory"]) / "output"
@@ -160,6 +148,9 @@ def test_start_job_snapshots_current_desktop_settings(tmp_path, monkeypatch):
     assert options["native_hevc_preset"] == "balanced_4k"
     assert options["initial_prompt"] == "configured prompt"
     assert options["mlx_hotwords"] == "Aria, Sigrid"
+    assert options["alignment"]["method"] == "whisperx"
+    assert options["alignment"]["device"] == "cpu"
+    assert options["alignment"]["version"] == 1
     assert options["vad_enabled"] is False
     assert options["vad_threshold"] == 0.7
     assert options["chunk_duration"] == 720
@@ -549,3 +540,156 @@ def test_failed_timing_repair_retains_words_captions_and_diagnostic(job, monkeyp
     assert transcribe.call_count == 1
     assert transcribe.call_args.args[2] == 'Custom'
     assert len(list(Path(state['directory']).glob('transcript-*.json'))) == 1
+
+
+def test_export_extension_clamps_without_moving_anchors():
+    from app.mcp.captions import extend_export_captions
+    captions = [{"start_ms": s, "end_ms": e} for s, e in
+                [(0, 100), (1000, 1100), (1200, 1500), (1400, 1700), (1900, 2000)]]
+    result = extend_export_captions(captions, 2200)
+    assert [c["end_ms"] for c in result] == [600, 1200, 1500, 1900, 2200]
+    assert [c["start_ms"] for c in result] == [c["start_ms"] for c in captions]
+    assert captions[-1]["end_ms"] == 2000
+
+
+def test_realignment_preserves_text_ids_and_translations(job):
+    from app.mcp.alignment import reanchor_alignment
+    manager, job_id = job
+    batch = manager.get_caption_batch(job_id)
+    manager.submit_caption_batch(job_id, batch["batch_id"], batch["revision"], payload(batch))
+    state = manager.store.read(job_id)
+    raw = {"segments": [{"words": [{"word": w["text"], "start": (w["start_ms"] + 50)/1000,
+                                    "end": (w["end_ms"] + 50)/1000, "score": .8} for w in state["words"]]}]}
+    candidate = reanchor_alignment(state, raw)
+    assert [w["id"] for w in candidate["words"]] == [w["id"] for w in state["words"]]
+    assert candidate["batches"][0]["captions"][0]["translation"] == state["batches"][0]["captions"][0]["translation"]
+    assert candidate["batches"][0]["captions"][0]["start_ms"] == 50
+    assert state["words"][0]["start_ms"] == 0
+    raw["segments"][0]["words"].pop()
+    with pytest.raises(ValueError, match="coverage"):
+        reanchor_alignment(state, raw)
+    assert manager.store.read(job_id) == state
+
+
+def test_worker_uses_saved_alignment_and_legacy_native(tmp_path):
+    options = {"initial_prompt": "", "source_language": "en", "backend": "mlx",
+               "model": "local", "vad_enabled": False}
+    worker = Worker(tmp_path, "unused", "unused")
+    worker.update = Mock()
+    with patch("app.core.bk_asr.mlx_whisper.MLXWhisperASR") as factory:
+        factory.return_value._run.return_value = {"segments": []}
+        worker.transcribe("audio.wav", options)
+        assert factory.call_args.kwargs["alignment_method"] == "native"
+        options["alignment"] = {"method": "whisperx", "device": "cpu", "model_dir": "/models"}
+        result = worker.transcribe("audio.wav", options)
+        assert factory.call_args.kwargs["alignment_method"] == "whisperx"
+        assert factory.call_args.kwargs["align_inherit_proxy_environment"] is True
+        assert result["alignment_policy"] == options["alignment"]
+
+
+def test_realign_job_revision_and_resume(job, monkeypatch):
+    manager, job_id = job
+    with manager.store.edit(job_id) as state:
+        audio = Path(state["directory"]) / "audio.wav"
+        audio.write_bytes(b"audio")
+        state["audio_path"] = str(audio)
+    spawn = Mock()
+    monkeypatch.setattr(manager, "_spawn", spawn)
+    with pytest.raises(ValueError, match="Stale"):
+        manager.realign_job(job_id, 999)
+    assert not spawn.called
+    manager.realign_job(job_id, 1)
+    assert manager.store.read(job_id)["realign"]["alignment"]["method"] == "whisperx"
+    manager.resume_job(job_id)
+    assert spawn.call_count == 2
+
+
+def test_alignment_confidence_and_early_onset_warnings(job):
+    manager, job_id = job
+    batch = manager.get_caption_batch(job_id)
+    manager.submit_caption_batch(job_id, batch["batch_id"], batch["revision"], payload(batch))
+    state = manager.store.read(job_id)
+    state["words"][0].update(end_ms=900, alignment_score=.1)
+    report = validate(state)
+    assert any("early onset" in w for w in report["warnings"])
+    assert any("Low alignment confidence" in w for w in report["warnings"])
+
+
+def test_realignment_context_is_removed_without_averaging():
+    from app.mcp.alignment import remove_alignment_context
+    first = [{"word": str(i), "start": i, "end": i+.8} for i in range(5)]
+    second = [{"word": str(i), "start": i+.1, "end": i+.9} for i in range(2, 7)]
+    second[0]["end"] = 2.6
+    second[1]["start"] = 2.7  # Overlap at the nominal seam (word 3).
+    result = {"segments": [{"words": first + second}]}
+    segments = [{"global_start": 0, "split_index": 0, "word_count": 5},
+                {"global_start": 2, "split_index": 3, "word_count": 5}]
+    trimmed = remove_alignment_context(result, segments)["segments"][0]["words"]
+    assert [w["word"] for w in trimmed] == [str(i) for i in range(7)]
+    assert all(w in first + second for w in trimmed)
+    assert all(a["end"] <= b["start"] for a, b in zip(trimmed, trimmed[1:]))
+    result["segments"][0]["words"].pop()
+    with pytest.raises(ValueError, match="context coverage"):
+        remove_alignment_context(result, segments)
+
+
+def test_failed_alignment_keeps_saved_words_and_translations(job, monkeypatch):
+    manager, job_id = job
+    batch = manager.get_caption_batch(job_id)
+    manager.submit_caption_batch(job_id, batch["batch_id"], batch["revision"], payload(batch))
+    state = manager.store.read(job_id)
+    state["realign"] = {"alignment": {"method": "whisperx", "device": "cpu", "model_dir": "/models"}}
+    worker = Worker(manager.store.root, job_id, "test")
+    worker.stage = Mock()
+    worker.update = Mock()
+    with patch("app.core.bk_asr.whisper_x_auto.align_transcription_with_whisperx", return_value={"segments": []}):
+        with pytest.raises(ValueError, match="coverage"):
+            worker.realign(state, Path(state["directory"]), "audio.wav")
+    worker.update.assert_not_called()
+    saved = manager.store.read(job_id)
+    assert saved["words"] == state["words"]
+    assert saved["batches"] == state["batches"]
+
+
+@pytest.mark.parametrize("bad", ["missing", "interpolated", "valid"])
+def test_headless_alignment_rejects_incomplete_acoustic_evidence(monkeypatch, bad):
+    import types
+    from app.core.bk_asr.whisper_x_auto import align_transcription_with_whisperx
+    words = [{"word": "Hello", "start": .1, "end": .3, "score": .9}]
+    if bad == "missing":
+        words = []
+    elif bad == "interpolated":
+        words[0].pop("score")
+    fake = types.SimpleNamespace(load_audio=Mock(return_value=[]),
+                                 load_align_model=Mock(return_value=(object(), {})),
+                                 align=Mock(return_value={"segments": [{"words": words}]}))
+    with patch.dict(sys.modules, {"whisperx": fake}), \
+         patch("app.core.bk_asr.whisper_x_auto.apply_download_proxy_environment") as desktop_proxy, \
+         patch("app.core.bk_asr.nltk_utils.ensure_punkt_tab"), \
+         patch("app.core.utils.acceleration.resolve_whisperx_device", return_value={"device": "cpu"}):
+        args = ("audio.wav", [{"start": 0, "end": 1, "text": "Hello"}], "en")
+        if bad == "valid":
+            assert align_transcription_with_whisperx(*args, inherit_proxy_environment=True)["language"] == "en"
+        else:
+            with pytest.raises(ValueError, match="alignment"):
+                align_transcription_with_whisperx(*args, inherit_proxy_environment=True)
+        desktop_proxy.assert_not_called()
+
+
+def test_alignment_policy_rejects_implementation_drift():
+    from app.mcp.settings import check_alignment_snapshot
+    check_alignment_snapshot({})  # Old jobs retain their native behavior.
+    with pytest.raises(ValueError, match="Unsupported"):
+        check_alignment_snapshot({"method": "whisperx", "version": 999})
+    with patch("importlib.metadata.version", return_value="new"):
+        with pytest.raises(ValueError, match="version differs"):
+            check_alignment_snapshot({"method": "whisperx", "version": 1, "whisperx_version": "old"})
+
+
+def test_complete_validation_report_keeps_all_review_warnings():
+    state = {"words": [{"id": f"w{i}", "text": "x", "start_ms": i*100,
+                       "end_ms": i*100+50, "alignment_score": .1} for i in range(110)], "batches": []}
+    assert validate(state)["truncated"]
+    full = validate(state, limit=None)
+    assert not full["truncated"]
+    assert len(full["warnings"]) == 110

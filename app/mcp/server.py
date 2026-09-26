@@ -63,6 +63,12 @@ def submit_caption_batch(job_id: str, batch_id: str, revision: int, captions: li
 
 
 @mcp.tool()
+def realign_job(job_id: str, revision: int) -> dict:
+    """Explicitly migrate the entire saved transcript to independent acoustic alignment. Preserves word IDs, text and translations only if exact coverage and timing validation pass; otherwise retains originals and diagnostics. Invalidates exports on success; validate and export again. Never shifts times by a guessed offset."""
+    return manager.realign_job(job_id, revision)
+
+
+@mcp.tool()
 def retranscribe_range(job_id: str, start_word_id: str, end_word_id: str, revision: int, initial_prompt: str = "") -> dict:
     """Start local re-transcription with the saved backend/device; expands to complete affected batches. Replaces their word IDs, invalidates their translations, and retains other completed batches. Fetch new batch IDs afterwards."""
     return manager.retranscribe_range(job_id, start_word_id, end_word_id, revision, initial_prompt)

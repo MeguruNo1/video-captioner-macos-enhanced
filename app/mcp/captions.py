@@ -7,7 +7,6 @@ from app.core.utils.profanity_filter import mask_english_profanity
 from app.core.utils.subtitle_punctuation import normalize_cjk_quotes
 
 BATCH_WORDS = 160
-SHORT_DISPLAY_GAP_FILL_MS = 500
 
 
 def has_collapsed_word_run(words):
@@ -38,7 +37,8 @@ def words_from_result(result, prefix="w", offset=0):
                 raise ValueError("ASR word has non-finite timestamps")
             words.append({"id": f"{prefix}{len(words):06d}", "text": text,
                           "start_ms": round((start + offset) * 1000),
-                          "end_ms": round((end + offset) * 1000)})
+                          "end_ms": round((end + offset) * 1000),
+                          **({"alignment_score": raw["score"]} if "score" in raw else {})})
     if not words:
         raise ValueError("No speech detected; check the audio or choose a different source language")
     return words
@@ -116,17 +116,19 @@ def apply_text_settings(captions, settings):
     return result
 
 
-def fill_short_display_gaps(captions, max_gap_ms=SHORT_DISPLAY_GAP_FILL_MS):
-    """Extend the preceding caption across a positive gap of at most 0.5s."""
+def extend_export_captions(captions, duration_ms=None, extension_ms=500):
+    """Extend display only; never move starts, shrink ends, or mutate anchors."""
     result = [dict(caption) for caption in captions]
-    for current, following in zip(result, result[1:]):
-        gap = following["start_ms"] - current["end_ms"]
-        if 0 < gap <= max_gap_ms:
-            current["end_ms"] = following["start_ms"]
+    for index, caption in enumerate(result):
+        limit = result[index + 1]["start_ms"] if index + 1 < len(result) else duration_ms
+        if duration_ms is not None:
+            limit = min(limit, duration_ms) if limit is not None else duration_ms
+        end = caption["end_ms"] + extension_ms
+        caption["end_ms"] = max(caption["end_ms"], min(end, limit) if limit is not None else end)
     return result
 
 
-def validate(state):
+def validate(state, limit=100):
     errors, warnings = [], []
     if not state.get("words"):
         errors.append("No transcript available")
@@ -140,7 +142,11 @@ def validate(state):
             warnings.append(f"Zero-duration ASR word; review its containing caption: {word['id']}")
         if end - start > 3000:
             warnings.append(f"Unusually long word: {word['id']}")
+        score = word.get("alignment_score")
+        if isinstance(score, (int, float)) and score < 0.3:
+            warnings.append(f"Low alignment confidence; review audio: {word['id']}")
         previous_start = start
+    word_index = {word["id"]: word for word in state.get("words", [])}
     previous_end = -1
     previous_caption = None
     for batch in state.get("batches", []):
@@ -154,6 +160,9 @@ def validate(state):
             continue
         for caption in captions:
             start, end = caption["start_ms"], caption["end_ms"]
+            first_word = word_index[caption["start_word_id"]]
+            if first_word["end_ms"] - first_word["start_ms"] > 800:
+                warnings.append(f"Long caption-initial word; check early onset: {first_word['id']}")
             if start < previous_end:
                 errors.append(f"Overlapping captions at {caption['start_word_id']}")
             if previous_caption and 0 <= start - previous_end <= 300:
@@ -174,9 +183,9 @@ def validate(state):
             previous_end = end
             previous_caption = caption
         warnings.extend(f"{batch['id']}: {note}" for note in batch.get("notes", []))
-    return {"valid": not errors, "errors": errors[:100], "warnings": warnings[:100],
+    return {"valid": not errors, "errors": errors[:limit], "warnings": warnings[:limit],
             "error_count": len(errors), "warning_count": len(warnings),
-            "truncated": len(errors) > 100 or len(warnings) > 100}
+            "truncated": limit is not None and (len(errors) > limit or len(warnings) > limit)}
 
 
 def timestamp(ms):

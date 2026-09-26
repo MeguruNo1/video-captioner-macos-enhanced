@@ -13,9 +13,9 @@ from uuid import uuid4
 
 import psutil
 
-from .captions import apply_text_settings, anchor_captions, batch_words, fill_short_display_gaps, validate, render_srt
+from .captions import apply_text_settings, anchor_captions, batch_words, extend_export_captions, validate, render_srt
 from .layout import ensure_job_layout
-from .settings import read_shared_settings, workflow_settings_snapshot
+from .settings import read_shared_settings, workflow_settings_snapshot, alignment_snapshot
 from .store import Store, DEFAULT_OUTPUT, atomic_json
 
 PROJECT = Path(__file__).resolve().parents[2]
@@ -54,7 +54,7 @@ def check_environment(model=None, backend="auto", device="auto", compute_type="a
         errors.append(str(exc))
     names = ["mcp", "yt_dlp", "huggingface_hub", "psutil"]
     if selected:
-        names += ["mlx_whisper"] if selected["backend"] == "mlx" else ["whisperx", "torch", "torchaudio", "ctranslate2"]
+        names += ["mlx_whisper", "whisperx", "torch", "torchaudio"] if selected["backend"] == "mlx" else ["whisperx", "torch", "torchaudio", "ctranslate2"]
     packages = {name: importlib.util.find_spec(name) is not None for name in names}
     binaries = {name: shutil.which(name) for name in ("ffmpeg", "ffprobe", "node")}
     local = None
@@ -81,7 +81,7 @@ def check_environment(model=None, backend="auto", device="auto", compute_type="a
     errors.extend(f"Missing Python package: {name}" for name, found in packages.items() if not found)
     errors.extend(f"Missing executable: {name}" for name in ("ffmpeg", "ffprobe") if not binaries[name])
     warnings = list(hardware.get("warnings", []))
-    if selected and selected["backend"] == "whisperx":
+    if selected:
         warnings.append("WhisperX VAD/alignment models may download on first transcription; readiness checks only the cached ASR model. CUDA model loading may still fail on missing cuDNN/cuBLAS or insufficient VRAM; no silent CPU retry.")
     return {"ready": not errors, "errors": errors, "warnings": warnings, "python": sys.executable,
             "hardware": hardware, "selection": selected, "packages": packages, "binaries": binaries,
@@ -151,6 +151,7 @@ class JobManager:
         selection = environment["selection"]
         asr_settings = shared[selection["backend"]]
         shared["asr"] = dict(selection, model=environment["local_model"])
+        shared["alignment"] = alignment_snapshot(selection["backend"], selection["device"])
         if proxy_url is None:
             from app.core.utils.proxy_utils import get_effective_download_proxy_url
             proxy_url = get_effective_download_proxy_url(download.get("ProxyMode", "自动检测"), download.get("ProxyURL", ""))
@@ -167,6 +168,7 @@ class JobManager:
                              "model": environment["local_model"], "format_selector": format_selector,
                              "backend": selection["backend"], "device": selection["device"],
                              "compute_type": selection["compute_type"],
+                             "alignment": shared["alignment"],
                              "batch_size": shared["whisperx"]["batch_size"],
                              "vad_method": shared["whisperx"]["vad_method"],
                              "local_silero_dir": shared["whisperx"]["local_silero_dir"],
@@ -216,7 +218,7 @@ class JobManager:
             if state["status"] == "completed":
                 return self._summary(state)
             media_ready = Path(state.get("video_path", "")).is_file() and (not state.get("audio_path") or Path(state["audio_path"]).is_file())
-            if state["words"] and not state.get("retranscribe") and media_ready:
+            if state["words"] and not state.get("retranscribe") and not state.get("realign") and media_ready:
                 state.update(status="awaiting_captions", error=None, message="Continue caption batches in Codex")
             else:
                 try:
@@ -355,6 +357,18 @@ class JobManager:
                     "glossary_terms_added": [source for source, _ in added_terms],
                     "glossary_update_error": glossary_update_error, "validation": validate(state)}
 
+    def realign_job(self, job_id, revision):
+        with self.store.edit(job_id) as state:
+            self._editable(state)
+            if revision != state["revision"]:
+                raise ValueError("Stale revision; fetch job again")
+            if not Path(state.get("audio_path") or "").is_file():
+                raise ValueError("Saved audio is missing")
+            backend = state["options"].get("backend", "mlx")
+            state["realign"] = {"alignment": alignment_snapshot(backend, state["options"].get("device", "cpu"))}
+            self._spawn(state)
+        return self.get_job(job_id)
+
     def retranscribe_range(self, job_id, start_word_id, end_word_id, revision, initial_prompt=""):
         with self.store.edit(job_id) as state:
             self._editable(state)
@@ -371,8 +385,8 @@ class JobManager:
         return self.get_job(job_id)
 
     @staticmethod
-    def _validation(state):
-        report = validate(state)
+    def _validation(state, limit=100):
+        report = validate(state, limit=limit)
         if state.get("cover_required"):
             if not Path(state.get("thumbnail_path") or "").is_file():
                 report["errors"].append("Original thumbnail is missing")
@@ -427,8 +441,8 @@ class JobManager:
             if not report["valid"]:
                 return {"exported": False, "validation": report}
             root, flow, directory = ensure_job_layout(state)
-            captions = fill_short_display_gaps(
-                [c for b in state["batches"] for c in b["captions"]]
+            captions = extend_export_captions(
+                [c for b in state["batches"] for c in b["captions"]], state.get("duration_ms")
             )
             title = state["video_title"]
             files = {f"【字幕】「{title}」原文.srt": render_srt(captions, ["source"]),
@@ -442,7 +456,7 @@ class JobManager:
                 temporary = directory / f".{name}.tmp"
                 temporary.write_text(content, encoding="utf-8")
                 temporary.replace(directory / name)
-            atomic_json(flow / "validation.json", report)
+            atomic_json(flow / "validation.json", self._validation(state, limit=None))
             atomic_json(flow / "captions.json", {"revision": state["revision"], "captions": captions, "glossary": state["glossary"]})
             source_video = Path(state["video_path"])
             video_name = f"「{title}」{source_video.suffix.lower()}"

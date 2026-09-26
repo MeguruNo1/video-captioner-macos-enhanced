@@ -24,7 +24,7 @@
 
 默认下载最高可用视频画质；VP9/AV1 自动转为 HEVC，不额外压制硬字幕。输出原文 SRT、中文 SRT、最终视频、Codex 校订后的原文文稿及使用软件当前模板生成的简介文稿。支持 `source_language`、`target_language`、`output_dir`、本地 `model`、`format_selector`、`proxy_url`、`cookie_file`、`initial_prompt` 参数。`source_language=auto` 使用所选后端自动识别。新增 `backend=auto|mlx|whisperx`、`device=auto|cuda|cpu`、`compute_type=auto|float16|int8|…`；MLX 固定使用 Metal 和模型自带精度。
 
-每次 `start_job` 都读取软件界面保存的同一份 `settings.json`。代理、下载引擎策略、Cookie 自动刷新及浏览器、H.265 转码编码器和旧版 macOS 原生预设、所选后端、设备、精度和模型/VAD/阈值/分块/热词，以及字幕长度、术语提示和文本后处理开关会保存为任务快照。界面修改自动作用于之后的新任务；运行中的任务保留启动时快照，保证恢复后结果一致。显式空代理表示直连。模型必须已经在本机路径或 Hugging Face 缓存中；缺失时 `check_environment` 会提示，不会自动下载大模型。依赖沿用对应平台的桌面环境。MLX 任务不加载 WhisperX；WhisperX 任务使用本地转录及强制对齐。两条路径都不加载 Qt 或调用翻译 API。WhisperX 的 VAD 和对齐模型可能在首次转录时下载，环境检查仅验证已缓存的转写模型。
+每次 `start_job` 都读取软件界面保存的同一份 `settings.json`。代理、下载引擎策略、Cookie 自动刷新及浏览器、H.265 转码编码器和旧版 macOS 原生预设、所选后端、设备、精度和模型/VAD/阈值/分块/热词，以及字幕长度、术语提示和文本后处理开关会保存为任务快照。界面修改自动作用于之后的新任务；运行中的任务保留启动时快照，保证恢复后结果一致。显式空代理表示直连。模型必须已经在本机路径或 Hugging Face 缓存中；缺失时 `check_environment` 会提示，不会自动下载大模型。依赖沿用对应平台的桌面环境。新建 MLX 任务使用 Metal 转录和 WhisperX CPU 独立声学对齐；WhisperX 转录任务继续使用自己的强制对齐。alignment 快照保存对齐方式、设备、模型目录与选择规则、策略及 WhisperX 版本；无快照旧 MLX 任务保留 native 行为。原始转录恢复时必须匹配对齐快照。两条路径都不加载 Qt 或调用翻译 API。WhisperX 的 VAD 和对齐模型可能在首次转录时下载，环境检查仅验证已缓存的转写模型。
 
 ## 任务与恢复
 
@@ -78,3 +78,9 @@ Windows 在 PowerShell 中使用：
 ```
 
 `.venv\Scripts\python.exe` 是项目虚拟环境解释器；`-m`（module）运行 pip 模块，`-r`（requirements）读取 MCP 依赖；`--dry-run` 只预览安装变更，最后一行执行注册并同步 Skill。Windows 任务注册表在 `%LOCALAPPDATA%\VideoCaptioner\mcp`，运行日志写入其中的 `logs`（使用 `get_job.log_path` 定位，避免移动已打开的日志文件），默认输出在用户的 `Videos\VideoCaptioner`，默认术语表在本地应用数据目录的 `glossary.md`。窗口和 NVIDIA GPU 转录仍需 Windows 实机验收；本机 macOS 测试不能替代它们。
+
+## 已有字幕的时间修复
+
+文字正确但有局部提前时，调用 `realign_job(job_id, revision)`。后台使用批次前后文字和音频上下文，对整段词重新做声学对齐，检查精确覆盖及时间顺序，再一次性更新词锚点和已保存字幕；词 ID、校订文字和译文保持不变。它会保存迁移前任务和对齐结果，失败保留原数据。取消或失败后可 `resume_job`；成功后须重新 `validate_job` 和 `export_job`。不平均分配时间，不自动退回旧时间戳。
+
+校验增加低对齐置信度和句首词过长提示；这些只是复核线索，结构通过不表示已核听。导出每条字幕结束时间延长 500 毫秒，受到下一条开始时间和视频总时长限制，不缩短原字幕，不改变词锚点。

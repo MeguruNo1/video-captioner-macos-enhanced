@@ -168,6 +168,7 @@ def align_transcription_with_whisperx(
     language_code: str,
     device: str = "cpu",
     model_dir: str | None = None,
+    inherit_proxy_environment: bool = False,
 ) -> dict:
     """Force-align MLX Whisper text with WhisperX's independent acoustic model."""
     if not segments:
@@ -182,7 +183,12 @@ def align_transcription_with_whisperx(
             "MLX Whisper 强制对齐需要 WhisperX，请先安装 whisperx。"
         ) from exc
 
-    apply_download_proxy_environment()
+    # Headless workers already receive the saved proxy environment.
+    # Reading desktop proxy settings here would import Qt.
+    if not inherit_proxy_environment:
+        apply_download_proxy_environment()
+    from .nltk_utils import ensure_punkt_tab
+    ensure_punkt_tab()
     align_model = None
     try:
         audio = whisperx.load_audio(audio_path)
@@ -202,6 +208,18 @@ def align_transcription_with_whisperx(
                 return_char_alignments=False,
             )
         )
+        if inherit_proxy_environment:
+            # An aligner may return empty words for failed segments or interpolate
+            # missing words. Neither is an acoustic measurement for MCP anchors.
+            expected = "".join("".join(seg["text"].split()) for seg in segments)
+            actual = "".join("".join(word.get("word", "").split())
+                             for seg in result.get("segments", []) for word in seg.get("words", []))
+            if expected != actual:
+                raise ValueError("Forced alignment lost transcript coverage; retranscribe before captioning")
+            for seg in result.get("segments", []):
+                for word in seg.get("words", []):
+                    if any(word.get(key) is None for key in ("start", "end", "score")):
+                        raise ValueError("Forced alignment returned an unaligned word; no estimated timestamps accepted")
         result["language"] = language_code
         return result
     finally:
