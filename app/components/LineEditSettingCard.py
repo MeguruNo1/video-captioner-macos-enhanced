@@ -1,5 +1,5 @@
 from PyQt5.QtCore import Qt, pyqtSignal
-from qfluentwidgets import SettingCard, LineEdit
+from qfluentwidgets import SettingCard, LineEdit, PasswordLineEdit
 from qfluentwidgets.common.config import ConfigItem, qconfig
 
 
@@ -16,12 +16,18 @@ class LineEditSettingCard(SettingCard):
         content: str = None,
         placeholder: str = "",
         parent=None,
+        *,
+        password: bool = False,
     ):
         super().__init__(icon, title, content, parent)
 
         self.configItem = configItem
 
-        self.lineEdit = LineEdit(self)
+        self.lineEdit = PasswordLineEdit(self) if password else LineEdit(self)
+        self.lineEdit.setAccessibleName(title)
+        if password:
+            self.lineEdit.viewButton.setToolTip(self.tr("按住查看，松开隐藏"))
+            self.lineEdit.viewButton.setAccessibleName(self.tr("按住查看密钥"))
         self.lineEdit.setPlaceholderText(placeholder)
         self.hBoxLayout.addWidget(self.lineEdit, 1, Qt.AlignRight)
         self.hBoxLayout.addSpacing(16)

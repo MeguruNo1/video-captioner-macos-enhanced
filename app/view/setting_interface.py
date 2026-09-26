@@ -855,6 +855,7 @@ class SettingInterface(ScrollArea):
                 self.tr(f"输入您的 {service.value} API Key"),
                 "sk-" if service != LLMServiceEnum.OLLAMA else "",
                 self.llmGroup,
+                password=True,
             )
             setattr(self, f"{prefix}_api_key_card", api_key_card)
 
