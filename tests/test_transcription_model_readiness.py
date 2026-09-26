@@ -86,6 +86,8 @@ class TranscriptionModelReadinessTests(unittest.TestCase):
     def test_missing_model_does_not_enter_processing_or_create_thread(self):
         interface = QWidget()
         interface.is_processing = False
+        interface._metadata_loading = False
+        interface._set_processing = lambda value: setattr(interface, "is_processing", value)
         interface._set_translation_handoff_enabled = Mock()
         card = VideoInfoCard(interface)
         card.task = SimpleNamespace(

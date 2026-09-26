@@ -118,8 +118,8 @@ class HomeInterface(QWidget):
         transcribe_task = TaskFactory.create_transcribe_task(
             file_path, need_next_task=True
         )
-        self.transcription_interface.set_task(transcribe_task)
-        self.transcription_interface.update_info(file_path)
+        if self.transcription_interface.set_task(transcribe_task) is False:
+            return False
         self.transcription_interface.process()
         self.stackedWidget.setCurrentWidget(self.transcription_interface)
         self.pivot.setCurrentItem("TranscriptionInterface")
@@ -128,7 +128,8 @@ class HomeInterface(QWidget):
         transcribe_task = TaskFactory.create_transcribe_task(
             file_path, need_next_task=need_next_task
         )
-        self.transcription_interface.set_task(transcribe_task)
+        if self.transcription_interface.set_task(transcribe_task) is False:
+            return False
         self.show_transcription_page()
 
     def show_transcription_page(self):
@@ -140,7 +141,8 @@ class HomeInterface(QWidget):
         subtitle_task = TaskFactory.create_subtitle_task(
             file_path, video_path, need_next_task=False
         )
-        self.subtitle_optimization_interface.set_task(subtitle_task)
+        if self.subtitle_optimization_interface.set_task(subtitle_task) is False:
+            return False
         self.subtitle_optimization_interface.process()
         self.show_subtitle_optimization_page()
 
@@ -151,7 +153,8 @@ class HomeInterface(QWidget):
         subtitle_task = TaskFactory.create_subtitle_task(
             file_path, video_path, need_next_task=False
         )
-        self.subtitle_optimization_interface.set_task(subtitle_task)
+        if self.subtitle_optimization_interface.set_task(subtitle_task) is False:
+            return False
         self.show_subtitle_optimization_page()
 
     def show_subtitle_optimization_page(self):

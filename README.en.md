@@ -28,6 +28,7 @@ This README documents this fork. The package of the same name on PyPI belongs to
 - **Video downloads:** Dedicated download center, browser cookies, pause/resume, MP4 normalization and HEVC conversion.
 - **Local transcription:** MLX Whisper on Apple Silicon; WhisperX on CUDA / CPU with hardware-based device and precision selection.
 - **Subtitle processing:** Word timestamps, alignment, semantic segmentation, repeated-segment cleanup, terminology/hotwords, editing and export.
+- **Editing safeguards:** Merge consecutive subtitle rows, process current edits, and prevent file replacement during active tasks. API keys are masked by default.
 - **Translation:** The desktop app uses your configured translation service; the Codex workflow proofreads and translates in the current conversation.
 - **Automation:** Local MCP + Skill delivers video, subtitles, transcripts, descriptions and covers, with resumable jobs and partial re-transcription.
 

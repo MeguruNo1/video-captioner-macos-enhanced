@@ -203,6 +203,9 @@ class VideoInfoCard(CardWidget):
 
     def start_transcription(self, need_create_task=True, force_no_asr_cache=False):
         """开始转录过程"""
+        if self.transcription_interface.is_processing or (need_create_task and self.transcription_interface._metadata_loading):
+            self.transcription_interface._reject_busy_import()
+            return False
         if need_create_task:
             if self.video_info is None:
                 self._show_transcription_preflight_error(
@@ -222,7 +225,7 @@ class VideoInfoCard(CardWidget):
             self._show_transcription_preflight_error(model_message)
             return False
 
-        self.transcription_interface.is_processing = True
+        self.transcription_interface._set_processing(True)
         self.transcription_interface._set_translation_handoff_enabled(False)
         self.progress_ring.show()
         self.progress_ring.setValue(100)
@@ -248,7 +251,7 @@ class VideoInfoCard(CardWidget):
 
     def _show_transcription_preflight_error(self, message: str):
         if self.transcription_interface:
-            self.transcription_interface.is_processing = False
+            self.transcription_interface._set_processing(False)
             self.transcription_interface._set_translation_handoff_enabled(False)
         self.progress_ring.hide()
         self.progress_ring.setValue(0)
@@ -263,14 +266,15 @@ class VideoInfoCard(CardWidget):
 
     def on_transcript_progress(self, value, message):
         """更新转录进度"""
-        self.start_button.setText(message)
+        self.start_button.setText(self.tr("正在转录…"))
+        self.start_button.setToolTip(str(message))
         self.progress_ring.setValue(value)
         self.transcription_interface._save_transcription_state()
 
     def on_transcript_error(self, error):
         """处理转录错误"""
         if self.transcription_interface:
-            self.transcription_interface.is_processing = False
+            self.transcription_interface._set_processing(False)
             self.transcription_interface._set_translation_handoff_enabled(False)
         self.progress_ring.hide()
         self.progress_ring.setValue(0)
@@ -326,6 +330,7 @@ class TranscriptionInterface(QWidget):
         self.setAcceptDrops(True)
         self.task = None
         self.is_processing = False
+        self._metadata_loading = False
         self._transcription_status = "ready"
         self._restoring_state = False
         self._media_signature = None
@@ -552,7 +557,7 @@ class TranscriptionInterface(QWidget):
 
     def _on_transcript_finished(self, task: TranscribeTask):
         """转录完成处理"""
-        self.is_processing = False
+        self._set_processing(False)
         self.task = task
         self.video_info_card.task = task
         self._transcription_status = "completed"
@@ -606,8 +611,23 @@ class TranscriptionInterface(QWidget):
             parent=self,
         )
 
+    def _set_processing(self, running):
+        self.is_processing = running
+        self.open_file_action.setEnabled(not running and not self._metadata_loading)
+        self.model_button.setEnabled(not running)
+        self.transcription_setting_card.setEnabled(not running)
+
+    def _reject_busy_import(self):
+        if not self.is_processing and not self._metadata_loading:
+            return False
+        InfoBar.warning(self.tr("任务进行中"), self.tr("请等待当前媒体读取或转录完成，再打开其他文件。"),
+                        duration=3000, parent=self)
+        return True
+
     def _on_file_select(self):
         """文件选择处理"""
+        if self._reject_busy_import():
+            return
         default_dir = str(WORK_PATH)
         file_dialog = QFileDialog()
 
@@ -650,22 +670,34 @@ class TranscriptionInterface(QWidget):
 
     def update_info(self, file_path):
         """设置UI"""
+        if self._reject_busy_import():
+            return False
         from app.thread.video_info_thread import VideoInfoThread
 
         if self.video_info_card.video_info and self.video_info_card.video_info.file_path != file_path:
             self._clear_current_task()
+        self._metadata_loading = True
+        self.open_file_action.setEnabled(False)
         self.video_info_thread = VideoInfoThread(file_path)
-        self.video_info_thread.finished.connect(self.video_info_card.update_info)
+        self.video_info_thread.finished.connect(self._on_video_info_finished)
         self.video_info_thread.error.connect(self._on_video_info_error)
         self.video_info_thread.start()
 
+    def _on_video_info_finished(self, info):
+        self._metadata_loading = False
+        self.open_file_action.setEnabled(not self.is_processing)
+        self.video_info_card.update_info(info)
+
     def _on_video_info_error(self, error_msg):
         """处理视频信息提取错误"""
-        self.is_processing = False
+        self._metadata_loading = False
+        self.open_file_action.setEnabled(not self.is_processing)
         InfoBar.error(self.tr("错误"), self.tr(error_msg), duration=3000, parent=self)
 
     def set_task(self, task: TranscribeTask):
         """设置任务并更新UI"""
+        if self._reject_busy_import():
+            return False
         self._clear_current_task()
         self.task = task
         self.video_info_card.set_task(self.task)
@@ -688,14 +720,7 @@ class TranscriptionInterface(QWidget):
 
     def dropEvent(self, event):
         """拖拽放下事件处理"""
-        if self.is_processing:
-
-            InfoBar.warning(
-                self.tr("警告"),
-                self.tr("正在处理中，请等待当前任务完成"),
-                duration=3000,
-                parent=self,
-            )
+        if self._reject_busy_import():
             return
 
         files = [u.toLocalFile() for u in event.mimeData().urls()]
@@ -716,7 +741,7 @@ class TranscriptionInterface(QWidget):
                 self.update_info(file_path)
                 InfoBar.success(
                     self.tr("导入成功"),
-                    self.tr("开始语音转文字"),
+                    self.tr("媒体读取完成后，点击「开始转录」。"),
                     duration=3000,
                     parent=self,
                 )

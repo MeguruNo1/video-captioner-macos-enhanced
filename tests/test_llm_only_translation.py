@@ -29,6 +29,16 @@ class LLMOnlyTranslationTests(unittest.TestCase):
             [ASRDataSeg("hello", 0, 1000, translated_text="你好")]
         )
 
+    def test_edited_input_is_frozen_and_bypasses_disk_sidecar(self):
+        rows = {"1": {"start_time": 0, "end_time": 1000,
+                      "original_subtitle": "Edited", "translated_subtitle": "修改后"}}
+        holder = SimpleNamespace(task=SimpleNamespace(subtitle_path="missing.srt"))
+        SubtitleThread.set_input_data(holder, rows)
+        rows["1"]["original_subtitle"] = "Later edit"
+        data = SubtitleThread._load_input_subtitles(holder)
+        self.assertEqual(data.segments[0].text, "Edited")
+        self.assertEqual(data.segments[0].translated_text, "修改后")
+
     def test_atomic_save_replaces_primary_output(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output = Path(temp_dir) / "subtitle.srt"

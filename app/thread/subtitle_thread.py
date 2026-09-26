@@ -1,4 +1,5 @@
 import datetime
+from copy import deepcopy
 import os
 from pathlib import Path
 from typing import Dict
@@ -38,6 +39,7 @@ class SubtitleThread(QThread):
     def __init__(self, task: SubtitleTask):
         super().__init__()
         self.task: SubtitleTask = task
+        self.input_data = None
         self.subtitle_length = 0
         self.finished_subtitle_length = 0
         self.custom_prompt_text = ""
@@ -51,6 +53,17 @@ class SubtitleThread(QThread):
         # 初始化数据库和服务使用管理器
         self.db_manager = DatabaseManager(CACHE_PATH)
         self.service_manager = ServiceUsageManager(self.db_manager)
+
+    def set_input_data(self, data):
+        """Freeze edited rows without overwriting the imported subtitle file."""
+        self.input_data = deepcopy(data) if data is not None else None
+
+    def _load_input_subtitles(self):
+        if self.input_data is not None:
+            return ASRData.from_json(self.input_data)
+        source = Path(self.task.subtitle_path)
+        sidecar = source.with_name(f"{source.stem}.asr.json")
+        return ASRData.from_subtitle_file(str(sidecar if sidecar.exists() else source))
 
     def set_custom_prompt_text(self, text: str):
         self.custom_prompt_text = text
@@ -120,13 +133,7 @@ class SubtitleThread(QThread):
 
             subtitle_config = self.task.subtitle_config
 
-            sidecar_path = subtitle_path_obj.with_name(
-                f"{subtitle_path_obj.stem}.asr.json"
-            )
-            if sidecar_path.exists():
-                asr_data = ASRData.from_subtitle_file(str(sidecar_path))
-            else:
-                asr_data = ASRData.from_subtitle_file(subtitle_path)
+            asr_data = self._load_input_subtitles()
 
             # 1. 分割成字词级时间戳（对于非断句字幕且开启分割选项）
             if subtitle_config.need_split and not asr_data.is_word_timestamp():
