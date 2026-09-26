@@ -1278,9 +1278,31 @@ class DownloadCenterInterface(QWidget):
             return
 
         self.terminate_button.setVisible(False)
-        self.start_button.setText(self.tr("开始下载"))
-        self.start_button.setToolTip("")
-        self.start_button.setEnabled(self.controls_enabled and self.preview_data is not None)
+        if self._pending_download_request:
+            self.start_button.setText(self.tr("继续下载"))
+            self.start_button.setToolTip(self.tr("使用已保存的方案继续下载"))
+            self.start_button.setEnabled(self.controls_enabled)
+            return
+        issue = self._download_readiness_issue()
+        self.start_button.setText(issue or self.tr("开始下载"))
+        self.start_button.setToolTip(issue or self.tr("按当前方案开始下载"))
+        self.start_button.setEnabled(self.controls_enabled and not issue)
+
+    def _download_readiness_issue(self):
+        if not self.preview_data or self.url_input.text().strip() != self.parsed_url:
+            return self.tr("请先解析链接")
+        if self.current_mode_key == "professional":
+            mode = self.professional_mode_combo.currentData() or "video_audio"
+            if mode in {"video", "video_audio"} and not self.selected_video_format:
+                return self.tr("请选择视频流")
+            if mode == "audio" or (mode == "video_audio" and not self.selected_video_format.get("has_audio")):
+                if not self.selected_audio_format:
+                    return self.tr("请选择音频流")
+        elif (self.simple_preset_combo.currentData() == "subtitle_only"
+              and not self._has_available_subtitle_choice()
+              and not any(box.isChecked() for box in (self.thumbnail_checkbox, self.metadata_checkbox, self.description_txt_checkbox))):
+            return self.tr("当前视频没有字幕")
+        return ""
 
     def _set_download_action_state(self, state: str):
         self.download_action_state = state
@@ -2552,6 +2574,7 @@ class DownloadCenterInterface(QWidget):
         self.last_selection_summary = self.tr("；").join(parts) if parts else self.tr("暂无")
         self.selection_summary_label.setText(self.tr("已选方案：") + self.last_selection_summary)
         self.selection_summary_label.setToolTip(self.selection_summary_label.text())
+        self._refresh_start_button_state()
         self.mode_panel_layout.invalidate()
         self.mode_panel_container.updateGeometry()
 

@@ -37,6 +37,57 @@ class DownloadCenterLayoutTests(unittest.TestCase):
         cls.settings_file_patch.stop()
         cls.temp_dir.cleanup()
 
+    def test_professional_download_requires_streams_but_muxed_video_needs_no_extra_audio(self):
+        interface = DownloadCenterInterface()
+        interface.url_input.setText("https://example.test/video")
+        interface.parsed_url = interface.url_input.text()
+        interface.preview_data = {"title": "Test", "video_formats": [], "audio_formats": []}
+        interface.current_mode_key = "professional"
+        interface.professional_mode_combo.setCurrentIndex(0)
+        interface.selected_video_format = None
+        interface.selected_audio_format = None
+        interface._refresh_start_button_state()
+        self.assertFalse(interface.start_button.isEnabled())
+        self.assertIn("视频流", interface.start_button.text())
+        interface.selected_video_format = {"format_id": "v", "has_audio": False}
+        interface._refresh_start_button_state()
+        self.assertFalse(interface.start_button.isEnabled())
+        self.assertIn("音频流", interface.start_button.text())
+        interface.selected_video_format["has_audio"] = True
+        interface._refresh_start_button_state()
+        self.assertTrue(interface.start_button.isEnabled())
+        interface.deleteLater()
+
+    def test_restored_request_resumes_on_first_click_without_live_worker(self):
+        interface = DownloadCenterInterface()
+        interface._pending_download_request = {"need_video": True}
+        interface.download_action_state = "idle"
+        interface.download_thread = None
+        interface._refresh_start_button_state()
+        self.assertEqual(interface.start_button.text(), "继续下载")
+        self.assertTrue(interface.start_button.isEnabled())
+        with patch.object(interface, "start_download") as start:
+            interface._on_start_button_clicked()
+            start.assert_called_once()
+        interface.deleteLater()
+
+    def test_missing_subtitles_still_allows_explicit_extra_downloads(self):
+        interface = DownloadCenterInterface()
+        interface.url_input.setText("https://example.test/video")
+        interface.parsed_url = interface.url_input.text()
+        interface.preview_data = {"title": "Test"}
+        interface.current_mode_key = "simple"
+        index = next(i for i in range(interface.simple_preset_combo.count())
+                     if interface.simple_preset_combo.itemData(i) == "subtitle_only")
+        interface.simple_preset_combo.setCurrentIndex(index)
+        for box in (interface.thumbnail_checkbox, interface.metadata_checkbox, interface.description_txt_checkbox):
+            box.setChecked(False)
+        with patch.object(interface, "_has_available_subtitle_choice", return_value=False):
+            self.assertTrue(interface._download_readiness_issue())
+            interface.thumbnail_checkbox.setChecked(True)
+            self.assertEqual(interface._download_readiness_issue(), "")
+        interface.deleteLater()
+
     def test_mode_panel_hides_inactive_page_instead_of_reserving_its_height(self):
         interface = DownloadCenterInterface()
         interface.resize(1120, 680)
