@@ -153,7 +153,7 @@ def test_start_job_snapshots_current_desktop_settings(tmp_path, monkeypatch):
         "selection": {"backend": "mlx", "device": "metal", "compute_type": "model"}
     })
     monkeypatch.setattr(manager, "resume_job", lambda job_id: manager.get_job(job_id))
-    result = manager.start_job("https://example.com/video")
+    result = manager.start_job("https://example.com/video", output_dir=str(tmp_path / "output"))
     state = manager.store.read(result["job_id"])
     options = state["options"]
     assert options["download_engine_strategy"] == "多线程"
@@ -488,3 +488,64 @@ def test_batch_sentence_break_handles_quotes_but_not_ellipsis():
     words[100]['text'] = 'finished.”'
     words[150]['text'] = 'uh...'
     assert make_batches(words)[0]['end_word_id'] == 'w000100'
+
+
+@pytest.mark.parametrize('backend,vad,collapsed,expected_vad', [
+    ('mlx', True, True, False),
+    ('mlx', True, False, True),
+    ('mlx', False, True, False),
+    ('whisperx', True, True, True),
+])
+def test_retranscribe_collapsed_timing_strategy(job, monkeypatch, backend, vad, collapsed, expected_vad):
+    manager, job_id = job
+    with manager.store.edit(job_id) as state:
+        state['words'][0]['end_ms'] = state['words'][0]['start_ms']
+        if collapsed:
+            state['words'][1]['end_ms'] = state['words'][1]['start_ms']
+        state['batches'] = make_batches(state['words'][:2]) + make_batches(state['words'][2:])
+        state['batches'][1]['captions'] = [{'preserved': True}]
+        state['worker'] = {'token': 'test'}
+        state['retranscribe'] = {'batch_ids': [state['batches'][0]['id']], 'initial_prompt': ''}
+    state = manager.store.read(job_id)
+    worker = Worker(manager.store.root, job_id, 'test')
+    options = {'backend': backend, 'vad_enabled': vad, 'initial_prompt': 'Saved prompt'}
+    calls = []
+    def transcribe(path, effective, prompt):
+        calls.append((dict(effective), prompt))
+        return {'segments': [{'words': [{'word': 'Hello', 'start': .1, 'end': .8}]}]}
+    monkeypatch.setattr(worker, 'transcribe', transcribe)
+    monkeypatch.setattr('app.core.bk_asr.mlx_workflow.extract_audio_chunk', lambda *a: Path('unused.wav'))
+    worker.retranscribe(state, Path(state['directory']), Path('unused.wav'), options)
+    assert calls == [({'backend': backend, 'vad_enabled': expected_vad, 'initial_prompt': 'Saved prompt'}, None)]
+    assert options['vad_enabled'] is vad
+    updated = manager.store.read(job_id)
+    assert updated['words'][1:] == state['words'][2:]
+    assert updated['batches'][1] == state['batches'][1]
+    diagnostic = json.loads(next(Path(state['directory']).glob('transcript-*.json')).read_text())
+    assert diagnostic['vad_enabled'] is expected_vad
+    assert diagnostic['strategy'] == ('mlx_continuous_audio' if backend == 'mlx' and vad and collapsed else 'saved_settings')
+
+
+def test_failed_timing_repair_retains_words_captions_and_diagnostic(job, monkeypatch):
+    manager, job_id = job
+    with manager.store.edit(job_id) as state:
+        for w in state['words'][:2]:
+            w['end_ms'] = w['start_ms']
+        state['worker'] = {'token': 'test'}
+        state['retranscribe'] = {'batch_ids': [state['batches'][0]['id']], 'initial_prompt': 'Custom'}
+    state = manager.store.read(job_id)
+    worker = Worker(manager.store.root, job_id, 'test')
+    transcribe = Mock(return_value={'segments': [{'words': [
+        {'word': 'Repeated', 'start': .1, 'end': .1},
+        {'word': 'words', 'start': .1, 'end': .1},
+    ]}]})
+    monkeypatch.setattr(worker, 'transcribe', transcribe)
+    monkeypatch.setattr('app.core.bk_asr.mlx_workflow.extract_audio_chunk', lambda *a: Path('unused.wav'))
+    with pytest.raises(ValueError, match='original captions retained'):
+        worker.retranscribe(state, Path(state['directory']), Path('unused.wav'), {'backend': 'mlx', 'vad_enabled': True})
+    updated = manager.store.read(job_id)
+    for key in ('words', 'batches', 'revision'):
+        assert updated[key] == state[key]
+    assert transcribe.call_count == 1
+    assert transcribe.call_args.args[2] == 'Custom'
+    assert len(list(Path(state['directory']).glob('transcript-*.json'))) == 1

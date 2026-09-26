@@ -8,7 +8,7 @@ import sys
 import traceback
 from uuid import uuid4
 
-from .captions import make_batches, words_from_result
+from .captions import has_collapsed_word_run, make_batches, words_from_result
 from .layout import ensure_job_layout
 from .store import Store, atomic_json, file_lock
 
@@ -179,9 +179,26 @@ class Worker:
             raise ValueError("Invalid splice anchors; select a wider word range")
         run_id = uuid4().hex
         chunk = extract_audio_chunk(audio, directory / f"retranscribe-{run_id}.wav", start, end)
-        result = self.transcribe(chunk, options, request["initial_prompt"])
-        atomic_json(directory / f"transcript-{run_id}.json", {"start_seconds": start, "end_seconds": end, "result": result})
+        # Repeating the same VAD windows can reproduce identical collapsed timing.
+        # Keep this bounded clip continuous, without changing the saved job options.
+        repair_timing = (
+            options.get("backend", "mlx") == "mlx"
+            and options.get("vad_enabled", False)
+            and has_collapsed_word_run(words[first:last+1])
+        )
+        effective_options = dict(options, vad_enabled=False) if repair_timing else options
+        strategy = "mlx_continuous_audio" if repair_timing else "saved_settings"
+        if repair_timing:
+            self.stage("retranscribing", message="Repairing collapsed MLX timing with VAD disabled for this clip")
+        result = self.transcribe(chunk, effective_options, request.get("initial_prompt") or None)
+        atomic_json(directory / f"transcript-{run_id}.json", {
+            "start_seconds": start, "end_seconds": end, "strategy": strategy,
+            "vad_enabled": effective_options.get("vad_enabled"), "result": result,
+        })
         replacement = words_from_result(result, prefix=f"r{run_id}-", offset=start)
+        if repair_timing and has_collapsed_word_run(replacement):
+            raise ValueError("MLX timing repair still contains consecutive zero-duration words; "
+                             f"original captions retained. Diagnostic: transcript-{run_id}.json")
         replacement_batches = make_batches(replacement)
         affected_ids = set(request["batch_ids"])
         new_batches = []

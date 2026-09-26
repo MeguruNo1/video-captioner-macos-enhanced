@@ -10,6 +10,17 @@ BATCH_WORDS = 160
 SHORT_DISPLAY_GAP_FILL_MS = 500
 
 
+def has_collapsed_word_run(words):
+    """Distinguish consecutive collapsed timings from isolated zero-length words."""
+    previous_zero = False
+    for word in words:
+        zero = word["start_ms"] == word["end_ms"]
+        if zero and previous_zero:
+            return True
+        previous_zero = zero
+    return False
+
+
 def words_from_result(result, prefix="w", offset=0):
     words = []
     for segment in result.get("segments", []):
