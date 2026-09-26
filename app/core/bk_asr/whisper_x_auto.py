@@ -13,7 +13,6 @@ from ..utils.proxy_utils import (
     apply_download_proxy_environment,
     build_download_proxy_env,
 )
-from .asr_data import ASRDataSeg
 from .base import BaseASR
 from .nltk_utils import call_with_punkt_tab_recovery
 
@@ -260,46 +259,6 @@ class WhisperXASR(BaseASR):
         self.align = align
         self.model_dir = model_dir
         self.need_word_time_stamp = need_word_time_stamp
-
-    def _make_segments(self, resp_data: dict) -> list[ASRDataSeg]:
-        segments = []
-
-        if self.need_word_time_stamp:
-            for segment in resp_data.get("segments", []):
-                for word in segment.get("words", []) or []:
-                    text = (word.get("word") or word.get("text") or "").strip()
-                    start = word.get("start")
-                    end = word.get("end")
-                    if not text or start is None or end is None:
-                        continue
-                    segments.append(
-                        ASRDataSeg(
-                            text=text,
-                            start_time=int(float(start) * 1000),
-                            end_time=int(float(end) * 1000),
-                            speaker=word.get("speaker") or segment.get("speaker") or "",
-                        )
-                    )
-
-        if segments:
-            return segments
-
-        for segment in resp_data.get("segments", []):
-            text = (segment.get("text") or "").strip()
-            start = segment.get("start")
-            end = segment.get("end")
-            if not text or start is None or end is None:
-                continue
-            segments.append(
-                ASRDataSeg(
-                    text=text,
-                    start_time=int(float(start) * 1000),
-                    end_time=int(float(end) * 1000),
-                    speaker=segment.get("speaker") or "",
-                )
-            )
-
-        return segments
 
     def _run(self, callback=None) -> dict:
         if callback is None:

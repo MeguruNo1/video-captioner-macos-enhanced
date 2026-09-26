@@ -5,7 +5,6 @@ from pathlib import Path
 
 from ..utils.logger import setup_logger
 from ..utils.mlx_model_utils import DEFAULT_MLX_MODEL, validate_mlx_model
-from .asr_data import ASRDataSeg
 from .base import BaseASR
 from .mlx_workflow import (
     build_chunk_windows,
@@ -85,46 +84,6 @@ class MLXWhisperASR(BaseASR):
         self.chunk_overlap = max(0, int(chunk_overlap or 0))
         self.align_device = align_device or "cpu"
         self.align_model_dir = align_model_dir
-
-    def _make_segments(self, resp_data: dict) -> list[ASRDataSeg]:
-        segments = []
-
-        if self.need_word_time_stamp:
-            for segment in resp_data.get("segments", []):
-                for word in segment.get("words", []) or []:
-                    text = (word.get("word") or word.get("text") or "").strip()
-                    start = word.get("start")
-                    end = word.get("end")
-                    if not text or start is None or end is None:
-                        continue
-                    segments.append(
-                        ASRDataSeg(
-                            text=text,
-                            start_time=int(float(start) * 1000),
-                            end_time=int(float(end) * 1000),
-                            speaker=word.get("speaker") or segment.get("speaker") or "",
-                        )
-                    )
-
-        if segments:
-            return segments
-
-        for segment in resp_data.get("segments", []):
-            text = (segment.get("text") or "").strip()
-            start = segment.get("start")
-            end = segment.get("end")
-            if not text or start is None or end is None:
-                continue
-            segments.append(
-                ASRDataSeg(
-                    text=text,
-                    start_time=int(float(start) * 1000),
-                    end_time=int(float(end) * 1000),
-                    speaker=segment.get("speaker") or "",
-                )
-            )
-
-        return segments
 
     def _transcribe_once(self, mlx_whisper, audio_path: str | Path) -> dict:
         if isinstance(audio_path, Path):

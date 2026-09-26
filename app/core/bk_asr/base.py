@@ -24,6 +24,7 @@ class BaseASR:
         self.audio_path = audio_path
         self.file_binary = None
         self.use_cache = use_cache
+        self.need_word_time_stamp = need_word_time_stamp
         self._set_data()
         self.cache_manager = CacheManager(str(CACHE_PATH))
 
@@ -66,10 +67,45 @@ class BaseASR:
         return self.crc32_hex
 
     def _make_segments(self, resp_data: dict) -> list[ASRDataSeg]:
-        """将响应数据转换为ASRDataSeg列表"""
-        raise NotImplementedError(
-            "_make_segments method must be implemented in subclass"
-        )
+        """Convert the shared Whisper result schema without changing timing rules."""
+        segments = []
+
+        if self.need_word_time_stamp:
+            for segment in resp_data.get("segments", []):
+                for word in segment.get("words", []) or []:
+                    text = (word.get("word") or word.get("text") or "").strip()
+                    start = word.get("start")
+                    end = word.get("end")
+                    if not text or start is None or end is None:
+                        continue
+                    segments.append(
+                        ASRDataSeg(
+                            text=text,
+                            start_time=int(float(start) * 1000),
+                            end_time=int(float(end) * 1000),
+                            speaker=word.get("speaker") or segment.get("speaker") or "",
+                        )
+                    )
+
+        if segments:
+            return segments
+
+        for segment in resp_data.get("segments", []):
+            text = (segment.get("text") or "").strip()
+            start = segment.get("start")
+            end = segment.get("end")
+            if not text or start is None or end is None:
+                continue
+            segments.append(
+                ASRDataSeg(
+                    text=text,
+                    start_time=int(float(start) * 1000),
+                    end_time=int(float(end) * 1000),
+                    speaker=segment.get("speaker") or "",
+                )
+            )
+
+        return segments
 
     def _run(self, callback=None, **kwargs) -> dict:
         """运行ASR服务并返回响应数据"""
