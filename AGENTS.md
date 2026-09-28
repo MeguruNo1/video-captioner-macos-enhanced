@@ -76,7 +76,10 @@ git diff --check
 `.venv/bin/python` 是项目解释器；`-m`（module）运行模块；`-q`（quiet）减少输出。pytest 运行测试，compileall 检查 Python 编译，`git diff --check` 检查差异中的空白问题。Windows 使用 `.\.venv\Scripts\python.exe` 替换解释器路径。
 
 - 先运行与改动相关的测试，必要时再跑全量。MCP 改动重点检查 `test_mcp_protocol.py`、`test_mcp_workflow.py`；平台及媒体改动检查对应 platform、acceleration、download、HEVC 测试。
-- 截至核对日期，仓库未配置统一 lint 或静态类型检查入口。先核对现状；没有工具时如实说明，不把编译检查称为 lint、类型检查或安装包构建。
+- 完成代码新增或修改后，提交前必须运行静态类型检查。Python 使用 Pyright，并指定项目 `.venv` 解释器；至少检查本次修改的 Python 文件，涉及接口、类型或继承关系时同时检查相关调用方。修复本次引入或本次修复范围内的类型错误，再提交。
+- 静态类型检查、语法编译和运行测试是不同的验证，不能互相替代。不得仅凭 `compileall` 或 pytest 通过就宣称类型检查通过，也不得通过关闭诊断或大范围使用 `Any`、`type: ignore` 掩盖错误。
+- 仓库尚未配置统一静态检查入口，可使用 `npx --yes pyright --pythonpath .venv/bin/python app/core/download_service.py` 检查单个文件，并在末尾追加其他实际受影响文件。`npx` 运行 npm 工具（本地未缓存时可能下载）；`--yes` 自动确认工具获取；`--pythonpath` 指定用于解析依赖的 Python 解释器；末尾路径是检查目标。Windows 将解释器路径替换为 `.venv\Scripts\python.exe`。
+- 汇报实际检查范围、工具和结果；工具不可用或存在范围外的既有错误时如实说明，不声称检查全部通过。
 - 仅文档变更核对路径、命令、链接和差异即可，无需为了修改说明文件运行媒体任务或打包。
 - Qt 测试通过不能替代界面验收；涉及交互时检查实际窗口、状态恢复和操作结果。macOS offscreen 崩溃须与原生显示结果区分。
 - 转录及发布验收需要真实目标平台、模型和媒体样本；说明是否完成实际转录、字幕导出和播放，不能仅凭 mock 测试宣称完成。
@@ -96,4 +99,4 @@ git diff --check
 
 本次核对包含聊天「清理 VideoCaptioner 代码问题」「查看项目 MCP 配置」，历史跨平台、字幕与发行记录，以及上列当前源码。历史“仅 MLX”的实现描述已不适用于现在的双后端代码；README 中的发行进度也不能代替实际产物验收。
 
-本文按用户指定命名为 `Agent.md`。需要工具自动加载仓库指令时，应另外核对该工具要求的文件名及加载机制。
+本仓库协作指令统一保存在根目录 `AGENTS.md`，适用于本仓库内的代码与文档工作。
