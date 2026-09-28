@@ -8,10 +8,15 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING, Any, Protocol, Self, cast, overload
 
 import psutil
 import requests
 import yt_dlp
+from yt_dlp.utils import DownloadError
+
+if TYPE_CHECKING:
+    from yt_dlp import _Params
 
 from app.config import APP_DATA_PATH
 from app.core.utils.edge_cookie_utils import export_browser_cookies, harden_cookie_file
@@ -798,6 +803,12 @@ def _robust_format_selector(selector: str, download_mode: str = "video_audio") -
     return selector
 
 
+def _create_youtube_dl(options: dict[str, Any]) -> yt_dlp.YoutubeDL:
+    # Options are assembled dynamically; the upstream TypedDict exists only in
+    # type stubs, so keep this assertion at the third-party API boundary.
+    return yt_dlp.YoutubeDL(cast("_Params", options))
+
+
 def _build_ydl_options(proxy_url: str, cookiefile_path: Path, progress_hooks=None) -> dict:
     options = {
         "quiet": True,
@@ -922,24 +933,25 @@ def _extract_metadata_info(
             }
         )
 
-        with yt_dlp.YoutubeDL(options) as ydl:
-            return ydl.extract_info(url, download=False, process=False)
+        with _create_youtube_dl(options) as ydl:
+            # yt-dlp returns a mutable dict; our metadata also carries app keys.
+            return cast(dict[str, Any], ydl.extract_info(url, download=False, process=False))
 
     try:
         info_dict = extract_once(cookiefile_path)
-    except yt_dlp.utils.DownloadError as exc:
+    except DownloadError as exc:
         if not cookiefile_path.exists() or not _is_stale_auth_error(exc):
             raise
         if _refresh_configured_browser_cookies(cookiefile_path):
             try:
                 info_dict = extract_once(cookiefile_path)
-            except yt_dlp.utils.DownloadError as refreshed_exc:
+            except DownloadError as refreshed_exc:
                 if not _is_stale_auth_error(refreshed_exc):
                     raise
                 logger.warning("刷新 Cookie 后仍被认证拦截，改用无 Cookie 默认客户端重试")
                 try:
                     info_dict = extract_once(NO_COOKIE_FILE_PATH)
-                except yt_dlp.utils.DownloadError as anonymous_exc:
+                except DownloadError as anonymous_exc:
                     if _is_stale_auth_error(anonymous_exc):
                         raise RuntimeError(
                             "YouTube 同时拒绝了登录与匿名请求，当前代理出口很可能触发风控；"
@@ -950,7 +962,7 @@ def _extract_metadata_info(
             logger.warning("现有 Cookie 被认证拦截，改用无 Cookie 默认客户端重试")
             try:
                 info_dict = extract_once(NO_COOKIE_FILE_PATH)
-            except yt_dlp.utils.DownloadError as anonymous_exc:
+            except DownloadError as anonymous_exc:
                 if _is_stale_auth_error(anonymous_exc):
                     raise RuntimeError(
                         "YouTube 同时拒绝了登录与匿名请求，当前代理出口很可能触发风控；"
@@ -1246,6 +1258,22 @@ def extract_preview(url: str, download_engine_strategy: str | None = None) -> di
     return normalize_preview_data(url, info_dict, thumbnail_bytes)
 
 
+class SignalEmitter(Protocol):
+    """Instance interface shared by callbacks and bound Qt signals."""
+
+    def emit(self, *args: Any) -> None: ...
+
+
+class SignalDescriptor(Protocol):
+    """A Qt signal binds to an emitter without importing Qt into this service."""
+
+    @overload
+    def __get__(self, instance: None, owner: Any) -> Self: ...
+
+    @overload
+    def __get__(self, instance: Any, owner: Any) -> SignalEmitter: ...
+
+
 class CallbackSignal:
     """Small callback adapter shared by the headless service and Qt wrapper."""
     def __init__(self, callback=None):
@@ -1257,8 +1285,15 @@ class CallbackSignal:
 
 
 class VideoDownloadService:
+    finished: SignalEmitter | SignalDescriptor
+    detailed_finished: SignalEmitter | SignalDescriptor
+    progress: SignalEmitter | SignalDescriptor
+    progress_detail: SignalEmitter | SignalDescriptor
+    error: SignalEmitter | SignalDescriptor
+    cancelled: SignalEmitter | SignalDescriptor
+
     @staticmethod
-    def tr(text):
+    def _message_text(text: str) -> str:
         return text
 
     def __init__(
@@ -1361,7 +1396,7 @@ class VideoDownloadService:
         except Exception as exc:
             if self._terminate_event.is_set():
                 self._wait_for_download_subprocesses()
-                message = self._cleanup_partial_download(self.tr("下载已终止，已清理当前下载数据。"))
+                message = self._cleanup_partial_download(self._message_text("下载已终止，已清理当前下载数据。"))
                 logger.info("%s", message)
                 self.cancelled.emit(message)
                 return
@@ -1488,7 +1523,7 @@ class VideoDownloadService:
             section = parsed_sections[0]
             temp = source.with_name(f".cut_temp{source.suffix}")
             label = f"{_seconds_to_time_text(section['start_time'])} - {_seconds_to_time_text(section['end_time'])}"
-            self.progress.emit(92, self.tr(f"正在裁剪片段 {label}..."))
+            self.progress.emit(92, self._message_text(f"正在裁剪片段 {label}..."))
             _cut_video_segment(
                 str(source), section["start_time"], section["end_time"], str(temp)
             )
@@ -1501,7 +1536,7 @@ class VideoDownloadService:
                 label = f"{_seconds_to_time_text(section['start_time'])} - {_seconds_to_time_text(section['end_time'])}"
                 self.progress.emit(
                     90 + idx * 5 // len(parsed_sections),
-                    self.tr(f"正在裁剪片段 {idx}/{len(parsed_sections)}: {label}..."),
+                    self._message_text(f"正在裁剪片段 {idx}/{len(parsed_sections)}: {label}..."),
                 )
                 _cut_video_segment(
                     str(source), section["start_time"], section["end_time"], str(output)
@@ -1758,7 +1793,7 @@ class VideoDownloadService:
             if self.selected_audio_format_id
             else "bestaudio[ext=m4a]/bestaudio"
         )
-        self.progress.emit(96, self.tr("检测到空音轨，正在仅补下载音频..."))
+        self.progress.emit(96, self._message_text("检测到空音轨，正在仅补下载音频..."))
         logger.warning(
             "下载结果缺少有效音频，开始仅补下载音频: media=%s format=%s",
             media_path,
@@ -1778,7 +1813,7 @@ class VideoDownloadService:
                     "noplaylist": True,
                 }
             )
-            with yt_dlp.YoutubeDL(recovery_options) as ydl:
+            with _create_youtube_dl(recovery_options) as ydl:
                 ydl.download([self.url])
 
             audio_files = [
@@ -1964,7 +1999,7 @@ class VideoDownloadService:
         terms_message = "请在 WhisperX 热词管理中手动生成"
         if need_transcript_txt and not transcript_txt_path:
             if subtitle_path:
-                self.progress.emit(2, self.tr("复用已下载字幕生成视频文稿..."))
+                self.progress.emit(2, self._message_text("复用已下载字幕生成视频文稿..."))
                 try:
                     transcript_txt_path = self._write_transcript_txt_file(
                         subtitle_path, info_dict, work_dir
@@ -1974,7 +2009,7 @@ class VideoDownloadService:
                     logger.exception("复用字幕生成视频文稿失败: %s", exc)
                     transcript_message = f"复用字幕生成视频文稿失败，稍后重试: {exc}"
             else:
-                self.progress.emit(2, self.tr("提前下载字幕并生成视频文稿..."))
+                self.progress.emit(2, self._message_text("提前下载字幕并生成视频文稿..."))
                 try:
                     subtitle_path = _download_subtitle_fallback(
                         subtitle_download_link,
@@ -2034,9 +2069,9 @@ class VideoDownloadService:
 
         try:
             try:
-                with yt_dlp.YoutubeDL(options) as ydl:
+                with _create_youtube_dl(options) as ydl:
                     ydl.download([self.url])
-            except yt_dlp.utils.DownloadError as exc:
+            except DownloadError as exc:
                 fallback_selector = self._fallback_format_selector()
                 current_selector = str(options.get("format") or "")
                 if need_video and _is_expired_media_url_error(exc):
@@ -2045,7 +2080,7 @@ class VideoDownloadService:
                         "下载地址返回 403，已清理 %s 个过期断点文件并重新解析下载一次",
                         removed,
                     )
-                    with yt_dlp.YoutubeDL(options) as ydl:
+                    with _create_youtube_dl(options) as ydl:
                         ydl.download([self.url])
                 elif (
                     need_video
@@ -2059,7 +2094,7 @@ class VideoDownloadService:
                         fallback_selector,
                     )
                     options["format"] = fallback_selector
-                    with yt_dlp.YoutubeDL(options) as ydl:
+                    with _create_youtube_dl(options) as ydl:
                         ydl.download([self.url])
                 else:
                     raise
@@ -2101,7 +2136,7 @@ class VideoDownloadService:
         ):
             source_path = Path(media_files[0])
             target_path = source_path.with_suffix(".mp4")
-            self.progress.emit(97, self.tr("正在将回退格式转换为 MP4..."))
+            self.progress.emit(97, self._message_text("正在将回退格式转换为 MP4..."))
             encoder = normalize_video_to_mp4(
                 str(source_path),
                 str(target_path),
