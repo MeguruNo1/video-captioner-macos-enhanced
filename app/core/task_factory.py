@@ -1,6 +1,6 @@
 import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from app.common.config import cfg
 from app.config import MODEL_PATH, WHISPERX_ONLY_MODE
@@ -106,6 +106,7 @@ class TaskFactory:
 
         output_path = str(Path(file_path).parent / f"【字幕】{output_name}{suffix}.srt")
 
+        split_type: Literal["sentence", "semantic"]
         if cfg.split_type.value == SplitTypeEnum.SENTENCE.value:
             split_type = "sentence"
         else:

@@ -1,7 +1,7 @@
 import datetime
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+from typing import Literal, Optional
 
 
 class SupportedAudioFormats(Enum):
@@ -422,7 +422,7 @@ class SubtitleConfig:
     translation_max_length: int = 0
     final_translation_rework_max_chars: int = 40
     # 字幕布局和分割
-    split_type: Optional[SplitTypeEnum] = None
+    split_type: Optional[Literal["sentence", "semantic"]] = None
     subtitle_layout: Optional[str] = None
     max_word_count_cjk: int = 12
     max_word_count_english: int = 18
