@@ -128,6 +128,14 @@ scripts/setup_youtube_pot_provider.sh
 
 该脚本需要 Node.js 20+、npm 和 Git，将提供器安装到 `~/Library/Application Support/VideoCaptioner/youtube-pot-provider`，不会启动常驻后台服务。Windows 需另行配置提供器，通过 `VIDEO_CAPTIONER_BGUTIL_SERVER_HOME` 环境变量指定其 `server` 目录；不能直接运行此 macOS 脚本。
 
+### 下载组件更新
+
+在「设置 → 下载组件更新」中可选择每天、每周或关闭检查，以及「仅提醒」（默认）或「自动更新」。定期检查只在桌面应用运行时执行；也可点击「检查更新」「更新组件」或「恢复上一版」。
+
+更新只管理 yt-dlp、其依赖声明要求的 yt-dlp-ejs，以及同版本的 bgutil PO Token 插件/本地服务，不升级转录依赖。新版安装到应用数据目录的 `download-components`，经过导入、依赖和服务版本检查后再切换；失败保留原版，已有任务继续使用原版本。桌面应用重启后生效，新启动的 MCP 进程也会加载同一套组件。更新后的真实网站下载仍可能受网络或网站变更影响，必要时可恢复上一版。
+
+源码版和依赖 `.venv` 的 App 启动器支持安装组件更新，需要可用的 pip、Node.js 20+；本地服务版本变化时还需要 Git 和 npm 9+。独立打包版目前仅检查组件版本，安装更新请使用新版应用安装包。更新日志保存在 `download-components/update-*.log`；旧组件版本保留用于回退，不会自动清理正在使用的目录。
+
 ## Codex 自动字幕工作流
 
 新增本地 MCP + Skill 接入：提供视频链接，由硬件适配的本地 MLX / WhisperX 转录、当前 Codex 校对断句与翻译；按视频名建立任务目录，输出最终视频、原文/中文字幕、原文文稿及模板简介。最高画质下载遇到 VP9/AV1 时自动转为 HEVC，无需电脑操控或独立翻译 API。支持任务恢复和局部重转录。安装与使用见 [Codex MCP 指南](docs/codex-mcp.md)。

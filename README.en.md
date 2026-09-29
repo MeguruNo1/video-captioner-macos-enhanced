@@ -128,6 +128,14 @@ scripts/setup_youtube_pot_provider.sh
 
 It requires Node.js 20+, npm and Git, installs the provider under `~/Library/Application Support/VideoCaptioner/youtube-pot-provider`, and does not start a persistent background service. On Windows, configure the provider separately and set the `VIDEO_CAPTIONER_BGUTIL_SERVER_HOME` environment variable to its `server` directory; this macOS script cannot be run directly.
 
+### Download component updates
+
+Under **Settings → Download component updates**, choose daily, weekly, or disabled checks and notification-only (default) or automatic updates. Scheduled checks run while the desktop application is open. Manual check, install, and rollback actions are also available.
+
+Updates manage only yt-dlp, the yt-dlp-ejs version required by its metadata, and matching versions of the bgutil PO Token plugin and local server. Transcription dependencies are unchanged. A new generation is prepared in the application data directory under `download-components`, validated, and then selected atomically. Failed updates keep the previous selection; running tasks keep their original generation. Restart the desktop application to activate it; newly launched MCP processes use the same selection. Import checks do not guarantee live website compatibility; rollback remains available.
+
+Source installs and `.venv`-based app launchers can install updates with pip and Node.js 20+. Updating the local provider server also requires Git and npm 9+. Standalone bundles currently support version checks only; update the application package to upgrade their components. Logs are saved as `download-components/update-*.log`. Previous generations are retained for rollback and are not deleted while processes may still use them.
+
 ## Codex subtitle workflow
 
 A local MCP server and Skill can download a video, transcribe with hardware-selected local MLX / WhisperX, and let the current Codex conversation proofread, segment, and translate captions. Each task uses a video-title directory and exports the final video, source/translated SRT, a proofread source transcript, and a template description. Highest-quality VP9/AV1 downloads are converted to HEVC. Jobs are resumable and support local re-transcription; no computer control or separate translation API is used. See the [Codex MCP guide](docs/codex-mcp.md).

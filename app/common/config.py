@@ -454,6 +454,14 @@ class Config(QConfig):
         "智能选择",
         OptionsValidator(["单线程", "多线程", "智能选择"]),
     )
+    download_component_frequency = OptionsConfigItem(
+        "Download", "ComponentCheckFrequency", "每天",
+        OptionsValidator(["每天", "每周", "关闭"]),
+    )
+    download_component_mode = OptionsConfigItem(
+        "Download", "ComponentUpdateMode", "仅提醒",
+        OptionsValidator(["仅提醒", "自动更新"]),
+    )
     download_hevc_encoder = OptionsConfigItem(
         "Download", "HevcEncoder", "auto",
         OptionsValidator(["auto", "hevc_nvenc", "hevc_qsv", "hevc_amf", "libx265"]),

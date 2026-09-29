@@ -53,6 +53,7 @@ class MainWindow(FluentWindow):
         self.initWorkspace()
         self.splashScreen.finish()
         QTimer.singleShot(0, self._start_cookie_extraction_on_startup)
+        self.settingInterface.start_component_update_schedule()
 
         # 注册退出处理， 清理进程
         import atexit
@@ -316,6 +317,13 @@ class MainWindow(FluentWindow):
         return super().eventFilter(obj, event)
 
     def closeEvent(self, event):
+        updater = self.settingInterface.componentUpdateThread
+        if updater is not None and updater.isRunning():
+            event.ignore()
+            InfoBar.warning(self.tr("下载组件正在更新"), self.tr("请等待组件更新结束后再退出，当前任务不受影响。"),
+                            duration=4000, parent=self)
+            return
+        self.settingInterface.componentUpdateTimer.stop()
         self._closing = True
         thread = self.startupCookieExportThread
         if thread is not None and thread.isRunning():
@@ -336,6 +344,9 @@ class MainWindow(FluentWindow):
         # os._exit(0)
 
     def stop(self):
+        updater = self.settingInterface.componentUpdateThread
+        if updater is not None and updater.isRunning():
+            updater.wait()
         thread = self.startupCookieExportThread
         if thread is not None and thread.isRunning():
             thread.wait()

@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -117,6 +118,7 @@ class StartupCookieExportTests(unittest.TestCase):
             _closing=False,
             startupCookieExportThread=thread,
             hide=Mock(),
+            settingInterface=SimpleNamespace(componentUpdateThread=None, componentUpdateTimer=Mock()),
         )
 
         MainWindow.closeEvent(window, event)
@@ -124,6 +126,19 @@ class StartupCookieExportTests(unittest.TestCase):
         self.assertTrue(window._closing)
         event.ignore.assert_called_once_with()
         window.hide.assert_called_once_with()
+
+    def test_close_does_not_destroy_running_component_update_thread(self):
+        updater = Mock()
+        updater.isRunning.return_value = True
+        event = Mock()
+        window = SimpleNamespace(
+            settingInterface=SimpleNamespace(componentUpdateThread=updater),
+            tr=lambda text: text,
+        )
+        with patch("app.view.main_window.InfoBar.warning") as warning:
+            MainWindow.closeEvent(cast(MainWindow, window), event)
+        event.ignore.assert_called_once_with()
+        warning.assert_called_once()
 
     def test_thread_release_reenables_controls_and_resumes_close(self):
         thread = Mock()
@@ -152,7 +167,8 @@ class StartupCookieExportTests(unittest.TestCase):
         thread.isRunning.return_value = True
         process = Mock()
         process.children.return_value = []
-        window = SimpleNamespace(startupCookieExportThread=thread)
+        window = SimpleNamespace(startupCookieExportThread=thread,
+                                 settingInterface=SimpleNamespace(componentUpdateThread=None))
 
         with patch("app.view.main_window.psutil.Process", return_value=process):
             MainWindow.stop(window)

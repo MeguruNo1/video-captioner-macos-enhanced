@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from PyQt5.QtCore import QEvent, Qt, QThread, QUrl, pyqtSignal
+from PyQt5.QtCore import QEvent, Qt, QThread, QTimer, QUrl, pyqtSignal
 from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtWidgets import QApplication, QFileDialog, QLabel, QSizePolicy, QWidget
 from qfluentwidgets import ComboBoxSettingCard, CustomColorSettingCard, ExpandLayout
@@ -26,6 +26,8 @@ from qfluentwidgets import (
     setThemeColor,
 )
 
+from app.core.download_components import check_due, status as component_status
+from app.thread.download_component_update_thread import DownloadComponentUpdateThread
 from app.common.config import cfg
 from app.common.signal_bus import signalBus
 from app.components.EditComboBoxSettingCard import EditComboBoxSettingCard
@@ -360,6 +362,10 @@ class SettingInterface(ScrollArea):
         # Run before Fluent's angle-only wheel filter on macOS trackpads.
         self.viewport().installEventFilter(self)
         self._cookie_export_in_progress = False
+        self.componentUpdateThread: DownloadComponentUpdateThread | None = None
+        self.componentUpdateTimer = QTimer(self)
+        self.componentUpdateTimer.setInterval(60 * 60 * 1000)
+        self.componentUpdateTimer.timeout.connect(self._scheduled_component_check)
         self.setWindowTitle(self.tr("设置"))
         self.scrollWidget = QWidget()
         self.expandLayout = ExpandLayout(self.scrollWidget)
@@ -376,6 +382,62 @@ class SettingInterface(ScrollArea):
         # 连接信号和槽
         self.__connectSignalToSlot()
         cfg.themeMode.valueChanged.connect(lambda *_: self.__applyPageStyles())
+
+    def _component_version_text(self) -> str:
+        state = component_status()
+        versions = state["running"]
+        text = " | ".join(f"{name}: {versions[name]}" for name in versions)
+        if state.get("restart_required"):
+            text += self.tr(" | 组件版本已切换，请重启软件")
+        if not state["can_install"]:
+            text += self.tr(" | 独立安装包请通过应用更新升级组件")
+        return text
+
+    def _refresh_component_buttons(self):
+        busy = self.componentUpdateThread is not None
+        state = component_status()
+        self.componentCheckCard.button.setEnabled(not busy)
+        self.componentInstallCard.button.setEnabled(not busy and state["can_install"])
+        self.componentRollbackCard.button.setEnabled(not busy and bool(state.get("current")))
+
+    def start_component_update_schedule(self):
+        self.componentUpdateTimer.start()
+        QTimer.singleShot(5000, self._scheduled_component_check)
+
+    def _scheduled_component_check(self):
+        if self.componentUpdateThread is not None:
+            return
+        if check_due(str(cfg.get(cfg.download_component_frequency))):
+            auto = cfg.get(cfg.download_component_mode) == "自动更新" and component_status()["can_install"]
+            self._start_component_action("auto" if auto else "check", scheduled=True)
+
+    def _start_component_action(self, action: str, scheduled: bool = False):
+        if self.componentUpdateThread is not None:
+            return
+        thread = DownloadComponentUpdateThread(action, get_effective_download_proxy_url(), self)
+        thread.progress.connect(self.componentCheckCard.setContent)
+        thread.completed.connect(lambda result: self._component_action_completed(result, scheduled))
+        thread.finished.connect(self._release_component_thread)
+        self.componentUpdateThread = thread
+        self._refresh_component_buttons()
+        self.componentCheckCard.setContent(self.tr("正在检查下载组件…"))
+        thread.start()
+
+    def _component_action_completed(self, result: dict, scheduled: bool):
+        message = result["message"]
+        if result.get("available"):
+            message += "：" + " | ".join(f"{k} {v}" for k, v in result["versions"].items())
+        self.componentCheckCard.setContent(message)
+        if not scheduled or result.get("available") or not result["success"] or component_status().get("restart_required"):
+            notify = InfoBar.success if result["success"] else InfoBar.warning
+            notify(self.tr("下载组件更新"), message, duration=7000, parent=self)
+
+    def _release_component_thread(self):
+        thread = self.componentUpdateThread
+        self.componentUpdateThread = None
+        if thread is not None:
+            thread.deleteLater()
+        self._refresh_component_buttons()
 
     def eventFilter(self, obj, event):
         if obj is self.viewport() and event.type() == QEvent.Wheel:
@@ -422,6 +484,9 @@ class SettingInterface(ScrollArea):
             self.tr("下载设置"), self.scrollWidget
         )
         # 账号验证组
+        self.downloadComponentGroup = SettingCardGroup(
+            self.tr("下载组件更新"), self.scrollWidget
+        )
         self.downloadAccountGroup = SettingCardGroup(
             self.tr("账号验证"), self.scrollWidget
         )
@@ -528,6 +593,33 @@ class SettingInterface(ScrollArea):
             self.tr("检测中"),
             self.downloadGroup,
         )
+        self.componentFrequencyCard = ComboBoxSettingCard(
+            cfg.download_component_frequency, FIF.UPDATE, self.tr("检查频率"),
+            self.tr("软件运行期间定期检查，关闭软件后不运行"),
+            texts=["每天", "每周", "关闭"], parent=self.downloadComponentGroup,
+        )
+        self.componentModeCard = ComboBoxSettingCard(
+            cfg.download_component_mode, FIF.UPDATE, self.tr("发现更新时"),
+            self.tr("自动更新会在后台准备新版，重启后生效"),
+            texts=["仅提醒", "自动更新"], parent=self.downloadComponentGroup,
+        )
+        self.componentCheckCard = PushSettingCard(
+            self.tr("检查更新"), FIF.SEARCH, self.tr("下载组件版本"),
+            self._component_version_text(), self.downloadComponentGroup,
+        )
+        self.componentInstallCard = PushSettingCard(
+            self.tr("更新组件"), FIF.DOWNLOAD, self.tr("更新 yt-dlp 及配套组件"),
+            self.tr("包含匹配的 EJS、PO Token 插件和本地服务；失败保留原版本"),
+            self.downloadComponentGroup,
+        )
+        self.componentRollbackCard = PushSettingCard(
+            self.tr("恢复上一版"), FIF.HISTORY, self.tr("恢复下载组件"),
+            self.tr("切换回更新前的版本，重启后生效"), self.downloadComponentGroup,
+        )
+        for card in (self.componentFrequencyCard, self.componentModeCard, self.componentCheckCard,
+                     self.componentInstallCard, self.componentRollbackCard):
+            self.downloadComponentGroup.addSettingCard(card)
+        self._refresh_component_buttons()
         self.downloadEngineStrategyCard = ComboBoxSettingCard(
             cfg.download_engine_strategy,
             FIF.SPEED_HIGH,
@@ -1044,6 +1136,7 @@ class SettingInterface(ScrollArea):
         self.expandLayout.addWidget(self.saveGroup)
         self.expandLayout.addWidget(self.downloadGroup)
         self.expandLayout.addWidget(self.downloadSettingGroup)
+        self.expandLayout.addWidget(self.downloadComponentGroup)
         self.expandLayout.addWidget(self.downloadAccountGroup)
         self.expandLayout.addWidget(self.personalGroup)
         self.expandLayout.addWidget(self.aboutGroup)
@@ -1051,6 +1144,9 @@ class SettingInterface(ScrollArea):
     def __connectSignalToSlot(self):
         """连接信号与槽"""
         cfg.appRestartSig.connect(self.__showRestartTooltip)
+        self.componentCheckCard.clicked.connect(lambda: self._start_component_action("check"))
+        self.componentInstallCard.clicked.connect(lambda: self._start_component_action("install"))
+        self.componentRollbackCard.clicked.connect(lambda: self._start_component_action("rollback"))
 
         # LLM服务切换
         self.llmServiceCard.comboBox.currentTextChanged.connect(
