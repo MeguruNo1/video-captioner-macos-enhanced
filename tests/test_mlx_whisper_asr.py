@@ -60,6 +60,7 @@ class MLXWhisperASRTests(unittest.TestCase):
             language="zh",
             word_timestamps=False,
             initial_prompt="请优先识别：VideoCaptioner, MLX Whisper",
+            condition_on_previous_text=False,
         )
 
     def test_run_rejects_missing_local_model_before_import(self):
@@ -74,25 +75,28 @@ class MLXWhisperASRTests(unittest.TestCase):
             asr._run()
 
     def test_transcribe_once_passes_path_as_string(self):
-        asr = MLXWhisperASR(
-            b"audio",
-            model="mlx-community/whisper-large-v3-turbo",
-            language="en",
-            need_word_time_stamp=True,
-        )
+        for alignment_method in ("native", "whisperx"):
+            with self.subTest(alignment_method=alignment_method):
+                asr = MLXWhisperASR(
+                    b"audio",
+                    model="mlx-community/whisper-large-v3-turbo",
+                    language="en",
+                    need_word_time_stamp=True,
+                    alignment_method=alignment_method,
+                )
+                mocked_transcribe = Mock(return_value={"segments": []})
+                fake_mlx_whisper = types.SimpleNamespace(transcribe=mocked_transcribe)
+                audio_path = Path("/tmp/videocaptioner-mlx/chunk-0001.wav")
 
-        mocked_transcribe = Mock(return_value={"segments": []})
-        fake_mlx_whisper = types.SimpleNamespace(transcribe=mocked_transcribe)
-        audio_path = Path("/tmp/videocaptioner-mlx/chunk-0001.wav")
-
-        self.assertEqual(asr._transcribe_once(fake_mlx_whisper, audio_path), {"segments": []})
-        mocked_transcribe.assert_called_once_with(
-            str(audio_path),
-            path_or_hf_repo="mlx-community/whisper-large-v3-turbo",
-            language="en",
-            word_timestamps=False,
-            initial_prompt=None,
-        )
+                self.assertEqual(asr._transcribe_once(fake_mlx_whisper, audio_path), {"segments": []})
+                mocked_transcribe.assert_called_once_with(
+                    str(audio_path),
+                    path_or_hf_repo="mlx-community/whisper-large-v3-turbo",
+                    language="en",
+                    word_timestamps=alignment_method == "native",
+                    initial_prompt=None,
+                    condition_on_previous_text=False,
+                )
 
     def test_word_timestamps_use_whisperx_forced_alignment(self):
         asr = MLXWhisperASR(

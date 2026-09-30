@@ -142,6 +142,8 @@ scripts/setup_youtube_pot_provider.sh
 
 新建 MLX 字幕任务会在 Metal 识别后使用本地 WhisperX CPU 独立对齐时间；旧任务可通过 `realign_job` 保留译文并重新对齐。
 
+MLX 转录不继承前一识别窗口的输出文本，以降低混合语言片段中前文干扰造成的漏句；仍保留配置的初始提示和热词。此策略适用于原生时间戳和 WhisperX 对齐两种模式，已有字幕需重新转录才会采用新策略。
+
 ### MCP、Skill 和 Codex 分别做什么
 
 - **MCP**（Model Context Protocol，模型上下文协议）：提供本机下载、转录、任务恢复和字幕导出工具。

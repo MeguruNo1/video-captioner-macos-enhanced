@@ -142,6 +142,8 @@ A local MCP server and Skill can download a video, transcribe with hardware-sele
 
 New MLX caption jobs use local WhisperX CPU alignment after Metal transcription. Existing jobs can use `realign_job` to realign timing while preserving translations.
 
+MLX transcription does not condition decoding on the previous recognition window's output, reducing context-driven omissions in mixed-language clips while retaining configured initial prompts and hotwords. This applies to both native timestamps and WhisperX alignment; existing captions require re-transcription to use the new policy.
+
 ### Roles of MCP, the Skill, and Codex
 
 - **MCP** (Model Context Protocol) exposes local tools for downloading, transcription, recovery, and export.

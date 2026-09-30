@@ -17,7 +17,7 @@ from .mlx_workflow import (
 )
 
 logger = setup_logger("mlx_whisper")
-MLX_WORKFLOW_VERSION = "vad-union-global-dedupe-whisperx-align-v2"
+MLX_WORKFLOW_VERSION = "vad-union-global-dedupe-whisperx-align-v3"
 
 def align_transcription_with_whisperx(*args, **kwargs):
     """Lazy compatibility entrypoint; native MLX jobs never load WhisperX."""
@@ -95,7 +95,9 @@ class MLXWhisperASR(BaseASR):
             # Legacy tasks can explicitly retain native timestamps.
             word_timestamps=self.need_word_time_stamp and self.alignment_method == "native",
             initial_prompt=self.initial_prompt or None,
-            **({"condition_on_previous_text": False} if self.alignment_method == "native" else {}),
+            # History can suppress whole sentences in mixed-language clips.
+            # Keep ASR decoding independent of the downstream timestamp backend.
+            condition_on_previous_text=False,
         )
 
     def _build_workflow_windows(
