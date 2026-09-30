@@ -58,7 +58,7 @@ class MLXWhisperASRTests(unittest.TestCase):
             b"audio",
             path_or_hf_repo="mlx-community/whisper-large-v3-turbo",
             language="zh",
-            word_timestamps=False,
+            word_timestamps=True,
             initial_prompt="请优先识别：VideoCaptioner, MLX Whisper",
             condition_on_previous_text=False,
         )
@@ -93,7 +93,7 @@ class MLXWhisperASRTests(unittest.TestCase):
                     str(audio_path),
                     path_or_hf_repo="mlx-community/whisper-large-v3-turbo",
                     language="en",
-                    word_timestamps=alignment_method == "native",
+                    word_timestamps=True,
                     initial_prompt=None,
                     condition_on_previous_text=False,
                 )
@@ -109,7 +109,13 @@ class MLXWhisperASRTests(unittest.TestCase):
         )
         transcription = {
             "segments": [
-                {"start": 0.0, "end": 1.0, "text": "hello world"},
+                {
+                    "start": 0.1, "end": 0.8, "text": "hello world",
+                    "words": [
+                        {"word": "hello", "start": 0.1, "end": 0.4},
+                        {"word": "world", "start": 0.5, "end": 0.8},
+                    ],
+                },
             ]
         }
         aligned = {
@@ -140,7 +146,7 @@ class MLXWhisperASRTests(unittest.TestCase):
         self.assertEqual(result, aligned)
         mocked_align.assert_called_once_with(
             b"audio",
-            [{"start": 0.0, "end": 1.0, "text": "hello world"}],
+            [{"start": 0.1, "end": 0.8, "text": "hello world"}],
             "en",
             device="cpu",
             model_dir="/models",

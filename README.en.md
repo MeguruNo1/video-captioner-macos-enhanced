@@ -144,6 +144,8 @@ New MLX caption jobs use local WhisperX CPU alignment after Metal transcription.
 
 MLX transcription does not condition decoding on the previous recognition window's output, reducing context-driven omissions in mixed-language clips while retaining configured initial prompts and hotwords. This applies to both native timestamps and WhisperX alignment; existing captions require re-transcription to use the new policy.
 
+When word timestamps are requested, MLX first uses native word timing to refine recognition intervals and decoder continuation points. In WhisperX mode, the independent acoustic model still recalculates the final word times. This reduces misalignment caused by coarse segments extending into other-language dialogue, but does not guarantee recovery of all omitted speech.
+
 ### Roles of MCP, the Skill, and Codex
 
 - **MCP** (Model Context Protocol) exposes local tools for downloading, transcription, recovery, and export.
