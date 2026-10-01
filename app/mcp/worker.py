@@ -244,8 +244,12 @@ class Worker:
         end = (words[last+1]["start_ms"] if last+1 < len(words) else state["duration_ms"]) / 1000
         if end <= start:
             raise ValueError("Invalid splice anchors; select a wider word range")
+        # Decode intact neighboring speech instead of feeding a clipped word tail
+        # to ASR. Context is removed using acoustic anchors, never fuzzy text.
+        context_start = max(0, start - 2)
+        context_end = min(state["duration_ms"] / 1000, end + 2)
         run_id = uuid4().hex
-        chunk = extract_audio_chunk(audio, directory / f"retranscribe-{run_id}.wav", start, end)
+        chunk = extract_audio_chunk(audio, directory / f"retranscribe-{run_id}.wav", context_start, context_end)
         # Repeating the same VAD windows can reproduce identical collapsed timing.
         # Keep this bounded clip continuous, without changing the saved job options.
         repair_timing = (
@@ -260,9 +264,19 @@ class Worker:
         result = self.transcribe(chunk, effective_options, request.get("initial_prompt") or None)
         atomic_json(directory / f"transcript-{run_id}.json", {
             "start_seconds": start, "end_seconds": end, "strategy": strategy,
+            "context_start_seconds": context_start, "context_end_seconds": context_end,
             "vad_enabled": effective_options.get("vad_enabled"), "result": result,
         })
-        replacement = words_from_result(result, prefix=f"r{run_id}-", offset=start)
+        from .retranscription import select_splice_words
+        try:
+            replacement = select_splice_words(
+                words_from_result(result, prefix=f"r{run_id}-", offset=context_start),
+                round(start * 1000), round(end * 1000),
+                round(context_start * 1000), round(context_end * 1000),
+                before=words[max(0, first - 2):first], after=words[last + 1:last + 3])
+        except ValueError as exc:
+            raise ValueError(f"{exc}; original captions retained. Select a wider word range. "
+                             f"Diagnostic: transcript-{run_id}.json") from exc
         if repair_timing and has_collapsed_word_run(replacement):
             raise ValueError("MLX timing repair still contains consecutive zero-duration words; "
                              f"original captions retained. Diagnostic: transcript-{run_id}.json")
