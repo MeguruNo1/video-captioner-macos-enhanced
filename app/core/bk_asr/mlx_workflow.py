@@ -300,10 +300,33 @@ def extract_audio_chunk(
     return output
 
 
+def find_local_silero_repository(preferred: str | None = None) -> Path | None:
+    """Find an existing checkout without torch.hub's remote validation/download."""
+    candidates = [Path(preferred).expanduser()] if preferred else []
+    candidates.append(LOCAL_SILERO_REPO)
+    for candidate in list(candidates):
+        if candidate.is_dir() and not (candidate / "hubconf.py").is_file():
+            nested = [p for p in candidate.iterdir() if p.is_dir() and (p / "hubconf.py").is_file()]
+            if len(nested) == 1:
+                candidates.extend(nested)
+    for candidate in candidates:
+        if (candidate / "hubconf.py").is_file():
+            return candidate
+    try:
+        import torch
+        for candidate in sorted(Path(torch.hub.get_dir()).glob("snakers4_silero-vad_*")):
+            if (candidate / "hubconf.py").is_file():
+                return candidate
+    except ImportError:
+        pass
+    return None
+
+
 def detect_speech_ranges(
     audio_path: str | Path,
     threshold: float = 0.5,
     strict: bool = False,
+    local_repo: str | Path | None = None,
 ) -> list[tuple[float, float]]:
     try:
         import torch
@@ -317,10 +340,13 @@ def detect_speech_ranges(
                 waveform, sample_rate, MLX_SAMPLE_RATE
             )
         waveform = waveform.float()
-        if LOCAL_SILERO_REPO.is_dir() and (LOCAL_SILERO_REPO / "hubconf.py").is_file():
-            logger.info("使用本地 Silero VAD: %s", LOCAL_SILERO_REPO)
+        repository = Path(local_repo) if local_repo is not None else LOCAL_SILERO_REPO
+        if local_repo is not None and not (repository / "hubconf.py").is_file():
+            raise RuntimeError("Configured local Silero repository is unavailable")
+        if repository.is_dir() and (repository / "hubconf.py").is_file():
+            logger.info("使用本地 Silero VAD: %s", repository)
             bundle = torch.hub.load(
-                repo_or_dir=str(LOCAL_SILERO_REPO),
+                repo_or_dir=str(repository),
                 model="silero_vad",
                 source="local",
                 force_reload=False,

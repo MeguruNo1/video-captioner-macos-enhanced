@@ -10,7 +10,9 @@ from .store import atomic_json
 def _replace_root(value, old_root: Path, new_root: Path):
     if not isinstance(value, str) or not value:
         return value
-    path = Path(value)
+    # macOS /tmp and /var are symlinks; compare canonical roots even after
+    # relocation, when the original file itself no longer exists.
+    path = Path(value).expanduser().resolve()
     try:
         relative = path.relative_to(old_root)
     except ValueError:

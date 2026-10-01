@@ -181,6 +181,7 @@ class Worker:
                     detected = current.get("detected_language") or options["source_language"]
                     evidence = prepare_evidence(audio, current.get("source_subtitle_path"),
                         threshold=options.get("vad_threshold", .5),
+                        local_silero_dir=options.get("local_silero_dir"),
                         compare_subtitles=detected != "auto" and detected == current.get("source_subtitle_language", options["source_language"]))
                     atomic_json(directory / "review-evidence.json", evidence)
                     self.update(review_evidence=evidence)
@@ -273,8 +274,10 @@ class Worker:
                 new_batches.extend(replacement_batches)
             if batch["id"] not in affected_ids:
                 new_batches.append(batch)
+        glossary = dict(state.get("base_glossary") or {})
+        glossary.update({k: v for b in new_batches for k, v in b["glossary"].items()})
         self.update(words=words[:first] + replacement + words[last+1:], batches=new_batches,
-                    glossary={k: v for b in new_batches for k, v in b["glossary"].items()},
+                    glossary=glossary,
                     revision=state["revision"]+1, artifacts={}, retranscribe=None)
 
 

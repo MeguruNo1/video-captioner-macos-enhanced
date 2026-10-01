@@ -6,14 +6,15 @@ import re
 from .captions import review_issue, validate
 
 
-def prepare_evidence(audio, subtitle_path=None, *, threshold=0.5, compare_subtitles=True):
+def prepare_evidence(audio, subtitle_path=None, *, threshold=0.5, compare_subtitles=True, local_silero_dir=None):
     """Local-only evidence. Missing VAD or captions is explicit, never a clean bill."""
-    from app.core.bk_asr.mlx_workflow import LOCAL_SILERO_REPO, detect_speech_ranges
+    from app.core.bk_asr.mlx_workflow import find_local_silero_repository, detect_speech_ranges
     evidence = {"version": 1, "speech_ranges": [], "source_cues": [], "checks": {}}
     checks = evidence["checks"]
-    if (LOCAL_SILERO_REPO / "hubconf.py").is_file():
+    repository = find_local_silero_repository(local_silero_dir)
+    if repository:
         try:
-            ranges = detect_speech_ranges(audio, threshold=threshold, strict=True)
+            ranges = detect_speech_ranges(audio, threshold=threshold, strict=True, local_repo=repository)
             evidence["speech_ranges"] = [{"start_ms": round(s * 1000), "end_ms": round(e * 1000)} for s, e in ranges]
             checks["speech_activity"] = {"status": "checked", "range_count": len(ranges)}
         except Exception as exc:
@@ -146,6 +147,12 @@ def review_counts(state):
     return counts
 
 
+def review_checks(state):
+    saved = state.get("review_evidence", {}).get("checks", {})
+    return {name: saved.get(name, {"status": "unavailable", "reason": "No saved evidence for this check; legacy or unchecked task"})
+            for name in ("speech_activity", "source_subtitles")}
+
+
 def checkpoint(state):
     """Computed from persisted data, never from conversation memory."""
     counts = review_counts(state)
@@ -171,6 +178,6 @@ def checkpoint(state):
         action = "validate_and_export"
     return {"next_action": action, "next_batch_id": pending["id"] if pending else None,
             "review": counts, "cover_ready": cover_ready, "cover_complete": cover_done,
-            "review_checks": state.get("review_evidence", {}).get("checks", {}),
+            "review_checks": review_checks(state),
             "review_available": "review_issues" in state,
             "review_instruction": "Resolved means the detector no longer sees the observation, not proof of acoustic correctness. Retained issues keep explicit review evidence."}

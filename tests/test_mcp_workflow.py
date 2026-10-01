@@ -496,6 +496,7 @@ def test_retranscribe_collapsed_timing_strategy(job, monkeypatch, backend, vad, 
         state['batches'] = make_batches(state['words'][:2]) + make_batches(state['words'][2:])
         state['batches'][1]['captions'] = [{'preserved': True}]
         state['worker'] = {'token': 'test'}
+        state['base_glossary'] = {'Miyabi': '雅'}
         state['retranscribe'] = {'batch_ids': [state['batches'][0]['id']], 'initial_prompt': ''}
     state = manager.store.read(job_id)
     worker = Worker(manager.store.root, job_id, 'test')
@@ -512,6 +513,7 @@ def test_retranscribe_collapsed_timing_strategy(job, monkeypatch, backend, vad, 
     updated = manager.store.read(job_id)
     assert updated['words'][1:] == state['words'][2:]
     assert updated['batches'][1] == state['batches'][1]
+    assert updated['glossary']['Miyabi'] == '雅'
     diagnostic = json.loads(next(Path(state['directory']).glob('transcript-*.json')).read_text())
     assert diagnostic['vad_enabled'] is expected_vad
     assert diagnostic['strategy'] == ('mlx_continuous_audio' if backend == 'mlx' and vad and collapsed else 'saved_settings')

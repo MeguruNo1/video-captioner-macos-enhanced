@@ -51,3 +51,15 @@ def test_strict_vad_does_not_disguise_missing_dependency_as_silence():
         with pytest.raises(RuntimeError, match='missing audio backend'):
             detect_speech_ranges('audio.wav', strict=True)
         assert detect_speech_ranges('audio.wav') == []
+
+
+def test_review_vad_discovers_existing_torch_cache_without_network(tmp_path):
+    from app.core.bk_asr.mlx_workflow import find_local_silero_repository
+    cached = tmp_path/'hub'/'snakers4_silero-vad_master'
+    cached.mkdir(parents=True)
+    (cached/'hubconf.py').touch()
+    torch = Mock()
+    torch.hub.get_dir.return_value = str(tmp_path/'hub')
+    with patch.dict('sys.modules', {'torch': torch}), patch('app.core.bk_asr.mlx_workflow.LOCAL_SILERO_REPO', tmp_path/'missing'):
+        assert find_local_silero_repository() == cached
+    torch.hub.load.assert_not_called()

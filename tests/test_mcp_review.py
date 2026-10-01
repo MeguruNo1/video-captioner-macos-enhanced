@@ -35,7 +35,7 @@ def test_small_pauses_and_matching_source_captions_are_not_missing_speech(job):
 
 
 def test_missing_evidence_is_explicit_and_never_downloads(tmp_path, monkeypatch):
-    monkeypatch.setattr('app.core.bk_asr.mlx_workflow.LOCAL_SILERO_REPO', tmp_path)
+    monkeypatch.setattr('app.core.bk_asr.mlx_workflow.find_local_silero_repository', lambda preferred: None)
     with patch('app.core.bk_asr.mlx_workflow.detect_speech_ranges') as detect:
         evidence = prepare_evidence(tmp_path/'audio.wav')
     detect.assert_not_called()
@@ -237,3 +237,31 @@ def test_delivery_error_totals_do_not_shrink_when_response_is_truncated(job):
     report = manager._validation(state)
     assert report['error_count'] == 112 and report['truncated']
     assert not report['valid']
+
+
+def test_export_canonicalizes_symlink_paths_and_recovers_from_copy_failure(job, tmp_path):
+    manager, job_id = job
+    alias = tmp_path/'alias'
+    alias.symlink_to(Path(manager.store.read(job_id)['directory']), target_is_directory=True)
+    with manager.store.edit(job_id) as state:
+        state['directory'] = str(alias)
+        for field in ('video_path', 'thumbnail_path', 'generated_cover_path'):
+            state[field] = str(alias/Path(state[field]).name)
+    batch = manager.get_caption_batch(job_id)
+    manager.submit_caption_batch(job_id, batch['batch_id'], batch['revision'], payload(batch))
+    with patch('app.mcp.jobs.shutil.copy2', side_effect=OSError('simulated full disk')):
+        with pytest.raises(OSError, match='simulated'):
+            manager.export_job(job_id)
+    saved = manager.store.read(job_id)
+    assert Path(saved['video_path']).is_file()
+    assert Path(saved['thumbnail_path']).is_file()
+    assert saved.get('flow_dir')
+    assert manager.export_job(job_id)['exported']
+
+
+def test_legacy_checks_are_explicitly_unavailable(job):
+    manager, job_id = job
+    result = manager.get_review_issues(job_id)
+    assert all(check['status'] == 'unavailable' for check in result['checks'].values())
+    assert manager.get_job(job_id)['checkpoint']['review_checks'] == result['checks']
+    assert manager.validate_job(job_id)['review_checks'] == result['checks']
