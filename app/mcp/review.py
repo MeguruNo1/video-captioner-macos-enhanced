@@ -1,9 +1,20 @@
 """Persistent, evidence-based review of transcript and caption observations."""
 from collections import Counter
+from copy import deepcopy
 from pathlib import Path
 import re
 
-from .captions import review_issue, validate
+from .captions import issue_summary, review_issue, validate
+
+
+# Increment when detector semantics change, even if word/caption revision does not.
+REVIEW_POLICY_VERSION = 2
+
+
+def review_is_current(state):
+    return ("review_issues" in state
+            and state.get("review_revision") == state.get("revision")
+            and state.get("review_policy_version") == REVIEW_POLICY_VERSION)
 
 
 def prepare_evidence(audio, subtitle_path=None, *, threshold=0.5, compare_subtitles=True, local_silero_dir=None):
@@ -97,7 +108,7 @@ def coverage_issues(state):
             continue
         seen.add(key)
         issues.append(review_issue("source_caption_disagreement", "warning",
-            "Source auto-caption and ASR differ substantially; neither is ground truth",
+            "Source subtitle and ASR differ substantially; neither is ground truth",
             _anchors(words, start, end), start_ms=start, end_ms=end,
             evidence={"source_text": text[:1500], "asr_text": " ".join(w["text"] for w in overlapping)[:1500],
                       "token_recall": round(recall, 3)}))
@@ -106,7 +117,7 @@ def coverage_issues(state):
 
 def reconcile_review(state, *, batch_id=None):
     """Update observations after a mutation; unrelated reviews keep their decisions."""
-    if "review_issues" not in state:
+    if "review_issues" not in state or state.get("review_policy_version") != REVIEW_POLICY_VERSION:
         batch_id = None
     phase = "batch" if batch_id else "delivery"
     observations = validate(state, limit=None, phase=phase, batch_id=batch_id)["issues"]
@@ -135,6 +146,7 @@ def reconcile_review(state, *, batch_id=None):
     for key in obsolete:
         records[key].update(status="resolved", resolution="observation_no_longer_present")
     state["review_revision"] = state["revision"]
+    state["review_policy_version"] = REVIEW_POLICY_VERSION
     return state
 
 
@@ -147,6 +159,24 @@ def review_counts(state):
     return counts
 
 
+def quality_status(state):
+    """Issue decisions never establish whole-video acoustic acceptance."""
+    records = list(state.get("review_issues", {}).values())
+    active = [i for i in records if i["status"] != "resolved"]
+    available = review_is_current(state)
+    complete = bool(available and state.get("words") and state.get("batches")
+                    and all(b.get("captions") for b in state["batches"])
+                    and not any(i["status"] == "pending" or i["severity"] == "error" for i in active))
+    return {"exported": state.get("status") == "completed" and bool(state.get("artifacts")),
+            "review_complete": complete, "review_scope": "detected_observations_only",
+            "review_current": available, "review_policy_version": state.get("review_policy_version"),
+            "full_audio_review": "not_recorded",
+            "audio_reviewed_issue_count": sum(i["status"] == "retained" and i.get("review_method") == "audio" for i in active),
+            "active_issue_summary": issue_summary(active),
+            "pending_issue_summary": issue_summary([i for i in active if i["status"] == "pending"]),
+            "instruction": "Export success and resolved observations do not prove acoustic correctness. Full-video listening is not recorded; report pending and retained observations with the delivery."}
+
+
 def review_checks(state):
     saved = state.get("review_evidence", {}).get("checks", {})
     return {name: saved.get(name, {"status": "unavailable", "reason": "No saved evidence for this check; legacy or unchecked task"})
@@ -155,6 +185,8 @@ def review_checks(state):
 
 def checkpoint(state):
     """Computed from persisted data, never from conversation memory."""
+    if state.get("words") and not review_is_current(state):
+        state = reconcile_review(deepcopy(state))
     counts = review_counts(state)
     cover_ready = bool(state.get("thumbnail_path")) and Path(state["thumbnail_path"]).is_file()
     cover_done = bool(state.get("generated_cover_path")) and Path(state["generated_cover_path"]).is_file()
@@ -178,6 +210,6 @@ def checkpoint(state):
         action = "validate_and_export"
     return {"next_action": action, "next_batch_id": pending["id"] if pending else None,
             "review": counts, "cover_ready": cover_ready, "cover_complete": cover_done,
-            "review_checks": review_checks(state),
+            "review_checks": review_checks(state), "quality_status": quality_status(state),
             "review_available": "review_issues" in state,
             "review_instruction": "Resolved means the detector no longer sees the observation, not proof of acoustic correctness. Retained issues keep explicit review evidence."}

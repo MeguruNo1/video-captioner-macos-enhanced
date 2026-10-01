@@ -4,6 +4,7 @@ import json
 import math
 import re
 from uuid import uuid4
+from collections import Counter
 
 from app.core.utils.profanity_filter import mask_english_profanity
 from app.core.utils.subtitle_punctuation import normalize_cjk_quotes
@@ -178,6 +179,20 @@ def review_issue(code, severity, message, words=(), *, stage="transcript", batch
             "evidence": evidence}
 
 
+def issue_summary(issues):
+    """Count the complete set before pagination; observations are not confirmed errors."""
+    return {"by_type": dict(Counter(i["code"] for i in issues)),
+            "by_severity": dict(Counter(i["severity"] for i in issues)),
+            "by_stage": dict(Counter(i["stage"] for i in issues))}
+
+
+def reading_metrics(text):
+    """Use CJK characters plus half-width Latin characters, excluding punctuation."""
+    cjk_count = len(re.findall(r"[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]", text))
+    letters = sum(character.isalnum() for character in text) - cjk_count
+    return cjk_count + letters * (0.5 if cjk_count else 1), bool(cjk_count)
+
+
 def validate(state, limit: int | None = 100, phase="delivery", batch_id=None):
     """Separate transcript, local caption and full delivery checks."""
     if phase not in {"transcript", "batch", "delivery"}:
@@ -224,6 +239,23 @@ def validate(state, limit: int | None = 100, phase="delivery", batch_id=None):
         previous_start = start
     flush_low_run()
     word_index = {word["id"]: word for word in words}
+    # Build display timings across batch boundaries with the same exporter helper.
+    all_captions = []
+    for candidate in state.get("batches", []):
+        if candidate.get("captions"):
+            try:
+                all_captions.extend(anchor_captions(batch_words(state, candidate), candidate["captions"]))
+            except ValueError:
+                pass  # The normal validation loop reports structural failures.
+        else:
+            # The next batch's first caption must start at its first word.
+            pending_words = batch_words(state, candidate)
+            if pending_words:
+                all_captions.append({"start_word_id": pending_words[0]["id"],
+                                     "start_ms": pending_words[0]["start_ms"],
+                                     "end_ms": pending_words[-1]["end_ms"]})
+    display_ends = {c["start_word_id"]: c["end_ms"] for c in
+                    extend_export_captions(all_captions, duration)}
     previous_end = -1
     previous_caption = None
     for batch in ([] if phase == "transcript" else batches):
@@ -249,8 +281,15 @@ def validate(state, limit: int | None = 100, phase="delivery", batch_id=None):
             def add(code, severity, message, evidence=None):
                 issues.append(review_issue(code, severity, message, span, stage="caption",
                     batch_id=batch["id"], evidence=evidence or {"caption": caption}))
-            if first_word["end_ms"] - first_word["start_ms"] > 800:
-                add("early_onset", "warning", f"Long caption-initial word; check early onset: {first_word['id']}")
+            first_duration = first_word["end_ms"] - first_word["start_ms"]
+            letter_count = sum(c.isalnum() for c in first_word["text"])
+            onset_threshold = max(800, min(1800, letter_count * 120))
+            score = first_word.get("alignment_score")
+            weak_alignment = isinstance(score, (int, float)) and score < 0.3
+            if first_duration > onset_threshold or (first_duration > 800 and weak_alignment):
+                add("early_onset", "warning", f"Unusually long caption-initial word; check early onset: {first_word['id']}",
+                    {"caption": caption, "word_duration_ms": first_duration,
+                     "duration_threshold_ms": onset_threshold, "weak_alignment": weak_alignment})
             if start < previous_end:
                 add("overlapping_captions", "error", f"Overlapping captions at {caption['start_word_id']}",
                     {"previous": previous_caption, "caption": caption})
@@ -265,10 +304,23 @@ def validate(state, limit: int | None = 100, phase="delivery", batch_id=None):
                             {"previous": previous_caption, "caption": caption})
                         break
             text = caption["translation"]
-            cjk = bool(re.search(r"[\u3400-\u9fff]", text))
-            units = len(re.sub(r"\s", "", text))
-            if end - start > 7000 or units > (42 if cjk else 84) or units / ((end-start)/1000) > (12 if cjk else 22):
-                add("reading_speed", "warning", f"Review reading length/speed: {caption['start_word_id']}")
+            units, cjk = reading_metrics(text)
+            display_end = display_ends.get(caption["start_word_id"], end)
+            display_duration = display_end - start
+            rate = units / (display_duration / 1000)
+            reasons = []
+            if display_duration > 7000:
+                reasons.append("long_display")
+            if units > (42 if cjk else 84):
+                reasons.append("long_text")
+            if rate > (12 if cjk else 22):
+                reasons.append("fast_reading")
+            if reasons:
+                add("reading_speed", "warning", f"Review reading length/speed: {caption['start_word_id']}",
+                    {"caption": caption, "display_end_ms": display_end,
+                     "display_duration_ms": display_duration, "reading_units": units,
+                     "units_per_second": round(rate, 2), "reasons": reasons,
+                     "counting": "CJK characters + half-width alphanumeric characters" if cjk else "alphanumeric characters"})
             previous_end, previous_caption = end, caption
         for note in batch.get("notes", []):
             issues.append(review_issue("caption_note", "warning", f"{batch['id']}: {note}", selected,
@@ -276,7 +328,7 @@ def validate(state, limit: int | None = 100, phase="delivery", batch_id=None):
     errors = [issue["message"] for issue in issues if issue["severity"] == "error"]
     warnings = [issue["message"] for issue in issues if issue["severity"] == "warning"]
     return {"valid": not errors, "phase": phase, "errors": errors[:limit], "warnings": warnings[:limit],
-            "issues": issues[:limit], "issue_count": len(issues),
+            "issues": issues[:limit], "issue_count": len(issues), "summary": issue_summary(issues),
             "error_count": len(errors), "warning_count": len(warnings),
             "pending_batches": sum(not b["captions"] for b in state.get("batches", [])),
             "truncated": limit is not None and len(issues) > limit}

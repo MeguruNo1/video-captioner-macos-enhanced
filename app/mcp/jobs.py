@@ -22,7 +22,7 @@ from .translation_reference import import_reference, load_reference, reference_f
 from .layout import ensure_job_layout
 from .settings import read_shared_settings, workflow_settings_snapshot, alignment_snapshot
 from .store import Store, DEFAULT_OUTPUT, atomic_json
-from .review import checkpoint, reconcile_review, review_checks, review_counts
+from .review import checkpoint, quality_status, reconcile_review, review_checks, review_counts, review_is_current
 
 PROJECT = Path(__file__).resolve().parents[2]
 ACTIVE = {"starting", "downloading", "extracting", "waiting_for_mlx", "waiting_for_asr", "transcribing", "retranscribing", "checking_transcript"}
@@ -332,6 +332,8 @@ class JobManager:
 
     def _caption_batch(self, state, batch_id=None, compact=False):
         self._editable(state)
+        if not review_is_current(state):
+            state = reconcile_review(deepcopy(state))
         job_id = state["job_id"]
         batch = next((b for b in state["batches"] if b["id"] == batch_id), None) if batch_id else next((b for b in state["batches"] if b["captions"] is None), None)
         if batch_id and batch is None:
@@ -461,7 +463,7 @@ class JobManager:
         self._editable(state)
         if event_id is not None and event_id != state.get("event_id", 0):
             raise ValueError("Review list changed; restart pagination with current event_id")
-        if state.get("review_revision") != state["revision"]:
+        if not review_is_current(state):
             reconcile_review(state)  # Read-only derived view for legacy tasks.
         issues = [i for i in state.get("review_issues", {}).values()
                   if (stage == "all" or i["stage"] == stage) and (status == "all" or i["status"] == status)]
@@ -469,7 +471,7 @@ class JobManager:
         return {"job_id": job_id, "revision": state["revision"], "event_id": state.get("event_id", 0),
                 "issues": issues[offset:offset + limit], "total": len(issues),
                 "next_offset": offset + limit if offset + limit < len(issues) else None,
-                "counts": review_counts(state), "checks": review_checks(state)}
+                "counts": review_counts(state), "checks": review_checks(state), "quality_status": quality_status(state)}
 
     def review_issue(self, job_id, issue_id, revision, decision, note, method="text"):
         if decision not in {"retain", "reopen"} or method not in {"audio", "text", "reference"}:
@@ -480,7 +482,7 @@ class JobManager:
             self._editable(state)
             if revision != state["revision"]:
                 raise ValueError("Stale revision; review current evidence again")
-            if state.get("review_revision") != state["revision"]:
+            if not review_is_current(state):
                 reconcile_review(state)
             issue = state.get("review_issues", {}).get(issue_id)
             if not issue or issue["status"] == "resolved":
@@ -499,7 +501,7 @@ class JobManager:
             raise ValueError("offset_seconds must be nonnegative")
         state = self.store.read(job_id)
         self._editable(state)
-        if state.get("review_revision") != state["revision"]:
+        if not review_is_current(state):
             reconcile_review(state)
         issue = state.get("review_issues", {}).get(issue_id)
         if not issue or issue["status"] == "resolved":
@@ -551,11 +553,12 @@ class JobManager:
 
     @staticmethod
     def _validation(state, limit: int | None = 100):
-        if state.get("review_revision") != state["revision"]:
+        if not review_is_current(state):
             state = reconcile_review(deepcopy(state))
         report = validate(state, limit=limit)
         report["review"] = review_counts(state)
         report["review_checks"] = review_checks(state)
+        report["quality_status"] = quality_status(state)
         if state.get("cover_required"):
             previous_errors = len(report["errors"])
             if not Path(state.get("thumbnail_path") or "").is_file():
@@ -604,7 +607,7 @@ class JobManager:
     def export_job(self, job_id):
         with self.store.edit(job_id) as state:
             self._editable(state)
-            if state.get("review_revision") != state["revision"]:
+            if not review_is_current(state):
                 reconcile_review(state)
             report = self._validation(state)
             if not Path(state.get("video_path", "")).is_file():
@@ -634,9 +637,6 @@ class JobManager:
                 temporary = directory / f".{name}.tmp"
                 temporary.write_text(content, encoding="utf-8")
                 temporary.replace(directory / name)
-            atomic_json(flow / "validation.json", self._validation(state, limit=None))
-            atomic_json(flow / "review.json", {"revision": state["revision"], "issues": state.get("review_issues", {}),
-                                               "checks": review_checks(state)})
             atomic_json(flow / "captions.json", {"revision": state["revision"], "captions": captions, "glossary": state["glossary"]})
             source_video = Path(state["video_path"])
             video_name = f"「{title}」{source_video.suffix.lower()}"
@@ -659,5 +659,11 @@ class JobManager:
                 name: str(directory / name) for name in cover_files
             })
             atomic_json(flow / "manifest.json", {"job_id": job_id, "revision": state["revision"], "files": state["artifacts"]})
-            state.update(status="completed", stage="completed", progress=100, message="Export complete")
-            return {"exported": True, "artifacts": state["artifacts"], "validation": report}
+            state.update(status="completed", stage="completed", progress=100,
+                         message="Export complete; full-video audio review is not recorded")
+            report["quality_status"] = quality_status(state)
+            atomic_json(flow / "validation.json", self._validation(state, limit=None))
+            atomic_json(flow / "review.json", {"revision": state["revision"], "issues": state.get("review_issues", {}),
+                                               "checks": review_checks(state), "quality_status": quality_status(state)})
+            return {"exported": True, "artifacts": state["artifacts"], "validation": report,
+                    "quality_status": quality_status(state)}
