@@ -1,3 +1,4 @@
+import html
 import json
 import math
 import re
@@ -538,7 +539,7 @@ class ASRData:
 
         # return vtt_text
 
-    def merge_segments(self, start_index: int, end_index: int, merged_text: str = None):
+    def merge_segments(self, start_index: int, end_index: int, merged_text: str | None = None):
         """合并从 start_index 到 end_index 的段（包含）。"""
         if (
             start_index < 0
@@ -627,21 +628,21 @@ class ASRData:
         Raises:
             ValueError: 不支持的文件格式或文件读取错误
         """
-        file_path = Path(file_path)
-        if not file_path.exists():
+        path = Path(file_path)
+        if not path.exists():
             raise FileNotFoundError(f"文件不存在: {file_path}")
 
         try:
-            content = file_path.read_text(encoding="utf-8")
+            content = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
-            content = file_path.read_text(encoding="gbk")
+            content = path.read_text(encoding="gbk")
 
-        suffix = file_path.suffix.lower()
+        suffix = path.suffix.lower()
 
         if suffix == ".srt":
             return ASRData.from_srt(content)
         elif suffix == ".vtt":
-            if "<c>" in content:  # YouTube VTT格式包含字级时间戳
+            if "<c>" in content and re.search(r"<\d{2}:\d{2}:\d{2}\.\d{3}>", content):  # 字级时间戳
                 return ASRData.from_youtube_vtt(content)
             return ASRData.from_vtt(content)
         elif suffix == ".json":
@@ -742,52 +743,30 @@ class ASRData:
         :return: ASRData实例
         """
         segments = []
-        # 跳过头部元数据
-        content = vtt_str.split("\n\n")[2:]
+        timestamp = r"(?:\d{2,}:)?\d{2}:\d{2}\.\d{3}"
+        timing = re.compile(rf"^({timestamp})\s+-->\s+({timestamp})(?:\s+.*)?$")
 
-        timestamp_pattern = re.compile(
-            r"(\d{2}):(\d{2}):(\d{2})\.(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})\.(\d{3})"
-        )
+        def milliseconds(value: str) -> int:
+            parts = value.split(":")
+            seconds, fraction = parts[-1].split(".")
+            hours = int(parts[0]) if len(parts) == 3 else 0
+            return hours * 3600000 + int(parts[-2]) * 60000 + int(seconds) * 1000 + int(fraction)
 
-        for block in content:
-            lines = block.strip().split("\n")
-            if len(lines) < 2:
+        normalized = vtt_str.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
+        for block in re.split(r"\n[ \t]*\n+", normalized.strip()):
+            lines = block.strip().splitlines()
+            if not lines or re.match(r"^(?:WEBVTT|NOTE|STYLE|REGION)(?:\s|$)", lines[0]):
                 continue
-
-            # 解析时间戳行
-            timestamp_line = lines[1]
-            match = timestamp_pattern.match(timestamp_line)
-            if not match:
-                continue
-
-            # 提取开始和结束时间
-            time_parts = list(map(int, match.groups()))
-            start_time = sum(
-                [
-                    time_parts[0] * 3600000,
-                    time_parts[1] * 60000,
-                    time_parts[2] * 1000,
-                    time_parts[3],
-                ]
-            )
-            end_time = sum(
-                [
-                    time_parts[4] * 3600000,
-                    time_parts[5] * 60000,
-                    time_parts[6] * 1000,
-                    time_parts[7],
-                ]
-            )
-
-            # 处理文本内容
-            text_line = " ".join(lines[2:])
-            cleaned_text = re.sub(r"<\d{2}:\d{2}:\d{2}\.\d{3}>", "", text_line)
-            cleaned_text = re.sub(r"</?c>", "", cleaned_text)
-            cleaned_text = cleaned_text.strip()
-
-            if cleaned_text and cleaned_text != " ":
-                segments.append(ASRDataSeg(cleaned_text, start_time, end_time))
-
+            # A cue identifier is optional; settings follow the end timestamp.
+            for index in range(min(2, len(lines))):
+                match = timing.match(lines[index].strip())
+                if match:
+                    text = " ".join(lines[index + 1:])
+                    text = html.unescape(re.sub(r"<[^>]*>", "", text))
+                    text = re.sub(r"\s+", " ", text).strip()
+                    if text:
+                        segments.append(ASRDataSeg(text, milliseconds(match[1]), milliseconds(match[2])))
+                    break
         return ASRData(segments)
 
     @staticmethod

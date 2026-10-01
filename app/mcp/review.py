@@ -36,10 +36,12 @@ def prepare_evidence(audio, subtitle_path=None, *, threshold=0.5, compare_subtit
         checks["source_subtitles"] = {"status": "skipped", "reason": "Source subtitle and detected transcript languages differ or are unknown"}
     elif subtitle_path and Path(subtitle_path).is_file():
         try:
-            from app.core.bk_asr.asr_data import ASRData
-            data = ASRData.from_subtitle_file(str(subtitle_path))
+            from app.core.utils.subtitle_transcript import load_subtitle_asr_data
+            data = load_subtitle_asr_data(subtitle_path)
             evidence["source_cues"] = [{"start_ms": s.start_time, "end_ms": s.end_time, "text": s.text}
                                        for s in data.segments if s.end_time > s.start_time]
+            if not evidence["source_cues"]:
+                raise ValueError("Source subtitle file contains no usable timed cues")
             checks["source_subtitles"] = {"status": "checked", "cue_count": len(evidence["source_cues"])}
         except Exception as exc:
             checks["source_subtitles"] = {"status": "unavailable", "reason": str(exc)}
