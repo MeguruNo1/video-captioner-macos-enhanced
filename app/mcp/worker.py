@@ -172,7 +172,8 @@ class Worker:
                         destination = raw_path if not raw_path.exists() else directory / f"transcript-retry-{uuid4().hex}.json"
                         atomic_json(destination, result)
                         words = words_from_result(result)
-                    self.update(words=words, batches=make_batches(words), detected_language=result.get("language") or options["source_language"])
+                    self.update(words=words, batches=make_batches(words, options.get("caption_batch_policy")),
+                                detected_language=result.get("language") or options["source_language"])
             if options.get("workflow_version", 1) >= 2:
                 self.stage("checking_transcript", message="Checking speech coverage before captioning")
                 current = self.store.read(self.job_id)
@@ -264,7 +265,7 @@ class Worker:
         if repair_timing and has_collapsed_word_run(replacement):
             raise ValueError("MLX timing repair still contains consecutive zero-duration words; "
                              f"original captions retained. Diagnostic: transcript-{run_id}.json")
-        replacement_batches = make_batches(replacement)
+        replacement_batches = make_batches(replacement, options.get("caption_batch_policy"))
         affected_ids = set(request["batch_ids"])
         new_batches = []
         for batch in state["batches"]:

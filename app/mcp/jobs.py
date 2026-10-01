@@ -16,7 +16,7 @@ from uuid import uuid4
 
 import psutil
 
-from .captions import apply_text_settings, anchor_captions, batch_words, extend_export_captions, validate, render_srt
+from .captions import ADAPTIVE_BATCH_POLICY, apply_text_settings, anchor_captions, batch_words, extend_export_captions, validate, render_srt
 from .translation_reference import import_reference, load_reference, reference_for_batch, REFERENCE_FILE
 from .layout import ensure_job_layout
 from .settings import read_shared_settings, workflow_settings_snapshot, alignment_snapshot
@@ -206,6 +206,7 @@ class JobManager:
                  "cover_required": True,
                  "options": {"url": url, "source_language": source_language, "target_language": target_language,
                              "workflow_version": 2,
+                             "caption_batch_policy": dict(ADAPTIVE_BATCH_POLICY),
                              "model": environment["local_model"], "format_selector": format_selector,
                              "backend": selection["backend"], "device": selection["device"],
                              "compute_type": selection["compute_type"],
@@ -352,6 +353,7 @@ class JobManager:
 
         result["context_version"] = self._context(state)["context_version"]
         result["preflight"] = review_counts(state)
+        result["boundary_reason"] = batch.get("boundary_reason", "legacy")
         result["context_before_captions"] = [c for b in state["batches"]
             for c in (b["captions"] or []) if c["end_word_id"] in {w["id"] for w in result["context_before"]}][-3:]
         if compact:
@@ -391,6 +393,7 @@ class JobManager:
                 return {"accepted": True, "revision": state["revision"],
                         "batch": self._caption_batch(state, batch_id, compact)}
             current["end_word_id"] = end_word_id
+            current["boundary_reason"] = "manual"
             if stop == len(words):
                 batches.pop(index + 1)
             else:

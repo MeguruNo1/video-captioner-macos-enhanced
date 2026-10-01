@@ -9,6 +9,10 @@ from app.core.utils.profanity_filter import mask_english_profanity
 from app.core.utils.subtitle_punctuation import normalize_cjk_quotes
 
 BATCH_WORDS = 160
+ADAPTIVE_BATCH_POLICY = {"version": 1, "target_words": 160, "min_words": 80,
+                         "max_words": 240, "max_estimated_chars": 32000,
+                         "max_duration_ms": 90000, "pause_ms": 650}
+SENTENCE_END = re.compile(r"(?<!\.)[.!?。！？][\"'”’」』]*$")
 
 
 def has_collapsed_word_run(words):
@@ -46,19 +50,47 @@ def words_from_result(result, prefix="w", offset: float = 0):
     return words
 
 
-def make_batches(words):
+def _adaptive_stop(words, cursor, policy):
+    if policy != ADAPTIVE_BATCH_POLICY:
+        raise ValueError("Unsupported caption batch policy; preserve the saved version")
+    hard_stop = min(len(words), cursor + policy["max_words"])
+    estimate = 0
+    for index in range(cursor, hard_stop):
+        estimate += 120 + 3 * len(words[index]["text"])
+        duration = words[index].get("end_ms", 0) - words[cursor].get("start_ms", 0)
+        if index > cursor and (estimate > policy["max_estimated_chars"] or duration > policy["max_duration_ms"]):
+            hard_stop = index
+            break
+    candidates = []
+    lower = min(hard_stop, cursor + policy["min_words"])
+    for stop in range(lower, hard_stop + 1):
+        count = stop - cursor
+        score = -abs(count - policy["target_words"])
+        if stop == len(words):
+            candidates.append((score + 110, stop, "end"))
+        elif SENTENCE_END.search(words[stop - 1]["text"]):
+            candidates.append((score + 100, stop, "sentence"))
+        elif words[stop].get("start_ms", 0) - words[stop - 1].get("end_ms", 0) >= policy["pause_ms"]:
+            candidates.append((score + 50, stop, "pause"))
+    if candidates:
+        _, stop, reason = max(candidates)
+        return stop, reason
+    return min(hard_stop, cursor + policy["target_words"]), "budget"
+
+
+def make_batches(words, policy=None):
     batches = []
     cursor = 0
     while cursor < len(words):
-        stop = min(cursor + BATCH_WORDS, len(words))
-        if stop < len(words):
+        stop, reason = _adaptive_stop(words, cursor, policy) if policy else (min(cursor + BATCH_WORDS, len(words)), "legacy")
+        if not policy and stop < len(words):
             for index in range(stop - 1, cursor + BATCH_WORDS // 2, -1):
-                if re.search(r"(?<!\.)[.!?。！？][\"'”’」』]*$", words[index]["text"]):
+                if SENTENCE_END.search(words[index]["text"]):
                     stop = index + 1
                     break
         batches.append({"id": uuid4().hex, "start_word_id": words[cursor]["id"],
                         "end_word_id": words[stop - 1]["id"], "captions": None,
-                        "glossary": {}, "notes": []})
+                        "glossary": {}, "notes": [], "boundary_reason": reason})
         cursor = stop
     return batches
 
