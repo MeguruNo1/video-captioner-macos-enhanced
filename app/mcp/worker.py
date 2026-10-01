@@ -11,6 +11,7 @@ from uuid import uuid4
 from .captions import has_collapsed_word_run, make_batches, words_from_result
 from .layout import ensure_job_layout
 from .store import Store, atomic_json, file_lock
+from .review import prepare_evidence, reconcile_review
 
 
 class Revoked(Exception):
@@ -38,7 +39,7 @@ class Worker:
         proxy = options.get("proxy_url")
         apply_download_proxy_environment("手动设置" if proxy else "不使用代理", proxy or "")
         initial_prompt = options["initial_prompt"] if prompt is None else prompt
-        language = None if options["source_language"] == "auto" else options["source_language"]
+        language = "" if options["source_language"] == "auto" else options["source_language"]
         backend = options.get("backend", "mlx")  # Existing jobs retain MLX/native timestamps.
         alignment = options.get("alignment", {})
         from .settings import check_alignment_snapshot
@@ -116,15 +117,18 @@ class Worker:
                     atomic_json(directory / "task-terms.json", term_data)
                     if term_data["hotwords"]:
                         options["mlx_hotwords"] = term_data["hotwords"]
-                state = self.update(video_path=video_path, metadata=metadata,
-                                    thumbnail_path=result.get("thumbnail_path"),
-                                    source_transcript_path=transcript_path,
-                                    term_candidates=term_data["candidates"],
-                                    base_glossary=term_data["glossary"],
-                                    glossary=term_data["glossary"], options=options)
+                # Publish paths only after relocation; covers may now be edited
+                # while transcription runs, without racing a directory move.
                 with self.store.edit(self.job_id) as live_state:
                     if (live_state.get("worker") or {}).get("token") != self.token:
                         raise Revoked()
+                    live_state.update(video_path=video_path, metadata=metadata,
+                                      thumbnail_path=result.get("thumbnail_path"),
+                                      source_transcript_path=transcript_path,
+                                      source_subtitle_path=result.get("subtitle_path"),
+                                      source_subtitle_language=options["source_language"] if options["source_language"] != "auto" else "en",
+                                      term_candidates=term_data["candidates"], base_glossary=term_data["glossary"],
+                                      glossary=term_data["glossary"], options=options)
                     _, directory, _ = ensure_job_layout(live_state)
                     state = live_state
             audio = directory / "audio.wav"
@@ -153,6 +157,7 @@ class Worker:
                     self.stage("transcribing", message=f"Transcribing with local {backend} / {options.get('device', 'metal')}")
                     raw_path = directory / "transcript-original.json"
                     words = None
+                    result = {}
                     if raw_path.exists():
                         try:
                             result = json.loads(raw_path.read_text(encoding="utf-8"))
@@ -167,7 +172,21 @@ class Worker:
                         destination = raw_path if not raw_path.exists() else directory / f"transcript-retry-{uuid4().hex}.json"
                         atomic_json(destination, result)
                         words = words_from_result(result)
-                    self.update(words=words, batches=make_batches(words))
+                    self.update(words=words, batches=make_batches(words), detected_language=result.get("language") or options["source_language"])
+            if options.get("workflow_version", 1) >= 2:
+                self.stage("checking_transcript", message="Checking speech coverage before captioning")
+                current = self.store.read(self.job_id)
+                if not current.get("review_evidence"):
+                    detected = current.get("detected_language") or options["source_language"]
+                    evidence = prepare_evidence(audio, current.get("source_subtitle_path"),
+                        threshold=options.get("vad_threshold", .5),
+                        compare_subtitles=detected != "auto" and detected == current.get("source_subtitle_language", options["source_language"]))
+                    atomic_json(directory / "review-evidence.json", evidence)
+                    self.update(review_evidence=evidence)
+            with self.store.edit(self.job_id) as current:
+                if (current.get("worker") or {}).get("token") != self.token:
+                    raise Revoked()
+                reconcile_review(current)
             # Record import isolation as useful diagnostic evidence.
             forbidden = [name for name in sys.modules if name.startswith("PyQt5") or name == "openai" or name.startswith("openai.")
                          or (backend == "mlx" and options.get("alignment", {}).get("method", "native") == "native" and (name == "whisperx" or name.startswith("whisperx.") or name == "app.core.bk_asr.whisper_x_auto"))]

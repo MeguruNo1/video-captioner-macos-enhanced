@@ -21,9 +21,10 @@ from .translation_reference import import_reference, load_reference, reference_f
 from .layout import ensure_job_layout
 from .settings import read_shared_settings, workflow_settings_snapshot, alignment_snapshot
 from .store import Store, DEFAULT_OUTPUT, atomic_json
+from .review import checkpoint, reconcile_review, review_counts
 
 PROJECT = Path(__file__).resolve().parents[2]
-ACTIVE = {"starting", "downloading", "extracting", "waiting_for_mlx", "waiting_for_asr", "transcribing", "retranscribing"}
+ACTIVE = {"starting", "downloading", "extracting", "waiting_for_mlx", "waiting_for_asr", "transcribing", "retranscribing", "checking_transcript"}
 
 
 def read_settings():
@@ -132,6 +133,7 @@ class JobManager:
             result["workflow_settings"] = dict(result["workflow_settings"], translation_reference={
                 key: value for key, value in reference.items() if key != "examples"})
             result["workflow_settings"]["translation_reference"]["example_count"] = len(reference["examples"])
+        result["checkpoint"] = checkpoint(state)
         return result
 
     def get_job(self, job_id):
@@ -203,6 +205,7 @@ class JobManager:
                  "words": [], "batches": [], "glossary": {}, "artifacts": {}, "worker": None,
                  "cover_required": True,
                  "options": {"url": url, "source_language": source_language, "target_language": target_language,
+                             "workflow_version": 2,
                              "model": environment["local_model"], "format_selector": format_selector,
                              "backend": selection["backend"], "device": selection["device"],
                              "compute_type": selection["compute_type"],
@@ -348,6 +351,7 @@ class JobManager:
 
 
         result["context_version"] = self._context(state)["context_version"]
+        result["preflight"] = review_counts(state)
         result["context_before_captions"] = [c for b in state["batches"]
             for c in (b["captions"] or []) if c["end_word_id"] in {w["id"] for w in result["context_before"]}][-3:]
         if compact:
@@ -427,6 +431,7 @@ class JobManager:
                 added_terms = []
                 glossary_update_error = f"Could not update glossary: {exc}"
             state["revision"] += 1
+            reconcile_review(state, batch_id=batch_id)
             state.update(status="awaiting_captions", artifacts={}, message="Caption batch saved")
             result = self._submission_result(state, batch_id, False, return_next_batch, compact)
             result.update(glossary_terms_added=[source for source, _ in added_terms],
@@ -437,10 +442,81 @@ class JobManager:
     def _submission_result(self, state, batch_id, idempotent, return_next_batch, compact):
         report = validate(state, phase="batch", batch_id=batch_id)
         result = {"accepted": True, "idempotent": idempotent, "revision": state["revision"],
-                  "validation": report, "captions_complete": report["pending_batches"] == 0}
+                  "validation": report, "captions_complete": report["pending_batches"] == 0,
+                  "checkpoint": checkpoint(state)}
         if return_next_batch:
             result["next_batch"] = self._caption_batch(state, compact=compact)
         return result
+
+    def get_review_issues(self, job_id, stage="all", status="pending", offset=0, limit=25, event_id=None):
+        if stage not in {"all", "transcript", "caption"} or status not in {"all", "pending", "retained", "resolved"}:
+            raise ValueError("Invalid review stage or status")
+        if offset < 0 or not 1 <= limit <= 100:
+            raise ValueError("offset must be nonnegative and limit must be 1..100")
+        state = self.store.read(job_id)
+        self._editable(state)
+        if event_id is not None and event_id != state.get("event_id", 0):
+            raise ValueError("Review list changed; restart pagination with current event_id")
+        if state.get("review_revision") != state["revision"]:
+            reconcile_review(state)  # Read-only derived view for legacy tasks.
+        issues = [i for i in state.get("review_issues", {}).values()
+                  if (stage == "all" or i["stage"] == stage) and (status == "all" or i["status"] == status)]
+        issues.sort(key=lambda i: (i["start_ms"] if i["start_ms"] is not None else -1, i["id"]))
+        return {"job_id": job_id, "revision": state["revision"], "event_id": state.get("event_id", 0),
+                "issues": issues[offset:offset + limit], "total": len(issues),
+                "next_offset": offset + limit if offset + limit < len(issues) else None,
+                "counts": review_counts(state), "checks": state.get("review_evidence", {}).get("checks", {})}
+
+    def review_issue(self, job_id, issue_id, revision, decision, note, method="text"):
+        if decision not in {"retain", "reopen"} or method not in {"audio", "text", "reference"}:
+            raise ValueError("decision must be retain/reopen; method must be audio/text/reference")
+        if not isinstance(note, str) or not note.strip() or len(note) > 2000:
+            raise ValueError("Provide a specific review note of 1..2000 characters")
+        with self.store.edit(job_id) as state:
+            self._editable(state)
+            if revision != state["revision"]:
+                raise ValueError("Stale revision; review current evidence again")
+            if state.get("review_revision") != state["revision"]:
+                reconcile_review(state)
+            issue = state.get("review_issues", {}).get(issue_id)
+            if not issue or issue["status"] == "resolved":
+                raise ValueError("Observation no longer exists; fetch the current review list")
+            if decision == "retain" and issue["severity"] == "error":
+                raise ValueError("Structural errors must be fixed; review cannot waive them")
+            if decision == "retain" and issue["code"] in {"suspected_missing_speech", "source_caption_disagreement", "low_alignment", "early_onset"} and method == "text":
+                raise ValueError("This acoustic observation needs audio or source-reference evidence")
+            issue.update(status="retained" if decision == "retain" else "pending", review_note=note.strip(),
+                         review_method=method, reviewed_revision=revision)
+            state.update(artifacts={}, status="awaiting_captions")
+        return {"accepted": True, "issue": issue, "checkpoint": checkpoint(state)}
+
+    def get_review_clip(self, job_id, issue_id, offset_seconds: float = 0):
+        if not 0 <= offset_seconds:
+            raise ValueError("offset_seconds must be nonnegative")
+        state = self.store.read(job_id)
+        self._editable(state)
+        if state.get("review_revision") != state["revision"]:
+            reconcile_review(state)
+        issue = state.get("review_issues", {}).get(issue_id)
+        if not issue or issue["status"] == "resolved":
+            raise ValueError("Observation no longer exists")
+        source = Path(state.get("audio_path") or "")
+        if not source.is_file() or issue["start_ms"] is None or issue["end_ms"] is None:
+            raise ValueError("Saved audio or observation timing is unavailable")
+        start = max(0, issue["start_ms"] / 1000 - 1) + offset_seconds
+        end = min(issue["end_ms"] / 1000 + 1, state["duration_ms"] / 1000)
+        if start >= end:
+            raise ValueError("Clip offset is outside the observation")
+        stop = min(end, start + 30)
+        directory = Path(state.get("flow_dir") or state["directory"]) / "review-clips"
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{issue_id}-{round(start * 1000)}.wav"
+        from app.core.bk_asr.mlx_workflow import extract_audio_chunk
+        extract_audio_chunk(source, path, start, stop)
+        return {"audio_path": str(path), "issue_id": issue_id, "revision": state["revision"],
+                "start_seconds": start, "end_seconds": stop,
+                "next_offset_seconds": offset_seconds + 30 if stop < end else None,
+                "instruction": "A clip is evidence to inspect, not proof that anyone listened."}
 
     def realign_job(self, job_id, revision):
         with self.store.edit(job_id) as state:
@@ -472,13 +548,16 @@ class JobManager:
     @staticmethod
     def _validation(state, limit: int | None = 100):
         report = validate(state, limit=limit)
+        report["review"] = review_counts(state)
+        report["review_checks"] = state.get("review_evidence", {}).get("checks", {})
         if state.get("cover_required"):
+            previous_errors = len(report["errors"])
             if not Path(state.get("thumbnail_path") or "").is_file():
                 report["errors"].append("Original thumbnail is missing")
             if not Path(state.get("generated_cover_path") or "").is_file():
                 report["errors"].append("Generated 4:3 Chinese cover is missing; call set_generated_cover")
-            report["error_count"] = len(report["errors"])
-            report["valid"] = not report["errors"]
+            report["error_count"] += len(report["errors"]) - previous_errors
+            report["valid"] = report["error_count"] == 0
         return report
 
     def validate_job(self, job_id):
@@ -523,6 +602,7 @@ class JobManager:
             if not Path(state.get("video_path", "")).is_file():
                 report["valid"] = False
                 report["errors"].append("Downloaded video is missing; restore it before export")
+                report["error_count"] += 1
             if not report["valid"]:
                 return {"exported": False, "validation": report}
             root, flow, directory = ensure_job_layout(state)
@@ -542,6 +622,8 @@ class JobManager:
                 temporary.write_text(content, encoding="utf-8")
                 temporary.replace(directory / name)
             atomic_json(flow / "validation.json", self._validation(state, limit=None))
+            atomic_json(flow / "review.json", {"revision": state["revision"], "issues": state.get("review_issues", {}),
+                                               "checks": state.get("review_evidence", {}).get("checks", {})})
             atomic_json(flow / "captions.json", {"revision": state["revision"], "captions": captions, "glossary": state["glossary"]})
             source_video = Path(state["video_path"])
             video_name = f"「{title}」{source_video.suffix.lower()}"

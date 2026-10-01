@@ -32,13 +32,23 @@ macOS 默认产物目录为 `~/Movies/VideoCaptioner/<视频名>`，其中 `flow
 
 `output` 文件名为：`【字幕】「视频名」原文.srt`、`【字幕】「视频名」译文.srt`、`「视频名」.<视频扩展名>`、`【视频文稿】「视频名」原文.txt`、`【简介】「视频名」.txt`、`原封面.png`、`生成封面.png`。
 
-下载流程同时保存原始 YouTube 封面。字幕完成后，Codex 通过 `get_cover_source` 取得原图，使用内置 GPT 图像编辑将画布扩展为 4:3、把封面文字翻译为中文，并尽量保留原字体、构图和视觉风格。生成文件通过 `set_generated_cover` 校验 4:3 比例并登记；缺少任一封面时导出校验不会通过。
+下载流程同时保存原始 YouTube 封面。原图与任务目录稳定后，状态中的 `checkpoint.cover_ready` 会变为真；Codex 可在本地转录期间提前处理封面。Codex 通过 `get_cover_source` 取得原图，使用内置 GPT 图像编辑将画布扩展为 4:3、把封面文字翻译为中文，并尽量保留原字体、构图和视觉风格。生成文件通过 `set_generated_cover` 校验 4:3 比例并登记；缺少任一封面时导出校验不会通过。
 
 `start_job` 立即返回 ID。阶段依次为下载、提取音频、等待本地转录资源、转录、等待字幕处理和完成。使用 `get_job` 查询、`list_jobs` 找回任务、`cancel_job` 取消、`resume_job` 恢复。独立进程持有任务锁，同一后端的转录工作以全局文件锁串行运行。网络中断保留 yt-dlp partial 文件；字幕逐批原子保存。关闭 MCP 连接不会主动终止工作进程；电脑关机或工作进程异常后，下一次查询会标记为可恢复中断。
 
 Codex 关闭后不能继续执行文本翻译；重新打开任务后从已保存批次继续。MCP 不会自行唤醒 Codex 或调用外部翻译服务。
 
 状态查询 `get_job` / `list_jobs` 不改写未变化的任务。返回的 `event_id` 跟踪持久化状态变化，与字幕编辑使用的 `revision` 独立。运行期间使用 `wait_job(job_id, after_event_id, timeout=30)` 等待新状态，最多等待 60 秒；无变化返回精简的 `changed=false`，任务不在运行阶段时立即返回。worker 异常退出仍会被识别为可恢复中断。旧任务没有事件编号时从 0 开始，下一次真正写入后递增。
+
+## 复核与接续
+
+新任务在转录完成后进入 `checking_transcript`：使用已缓存的本地 Silero VAD 查找至少 900 毫秒的无词覆盖语音区间，并将同语言源字幕与 ASR 做区间和词汇交叉检查。没有本地 VAD 不下载模型；缺依赖、无源字幕或语言不一致会记录为 unavailable/skipped，不能当作“未发现遗漏”。源字幕只是线索，不会补写 ASR 词或修改词时间。
+
+`get_review_issues(job_id, stage="transcript")` 分页读取翻译前疑点；`stage="caption"` 读取字幕疑点，`status` 可为 pending/retained/resolved/all。每页最多 100 项，后续页传首个结果的 `event_id`；状态变化会拒绝旧分页，避免漏项。`get_review_clip(job_id, issue_id)` 提取该疑点前后各 1 秒、每次最多 30 秒的本地 WAV；长区间用返回的 `next_offset_seconds` 继续。获取片段不代表已经核听。
+
+修复字幕或重新转录后，已消失的检测项自动标为 resolved（仅表示检测项消失，不是声学证明）。确实复核后仍需保留的警告，用 `review_issue(job_id, issue_id, revision, decision="retain", note=具体依据, method="audio|text|reference")` 记录；声学疑点不能只用 text 豁免，结构错误始终必须修复。`decision="reopen"` 重新打开疑点。证据内容改变会生成新指纹并重新等待复核；其他批次的结论保留。记录写入任务状态，导出同时保存在 `flow/review.json`。
+
+`get_job.checkpoint` 返回建议的下一步、下一批 ID、疑点统计、证据检查状态和封面状态。恢复聊天后先读取它和 `get_job_context`，再继续复核、未完成批次或导出；不依赖上一次聊天记忆。警告及缺失证据不会被伪装成“已核听”，最终交付仍需披露。
 
 ## 字幕接口
 

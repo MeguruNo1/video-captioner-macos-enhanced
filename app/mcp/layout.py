@@ -70,7 +70,7 @@ def ensure_job_layout(state: dict) -> tuple[Path, Path, Path]:
                 continue
             shutil.move(str(child), str(flow / child.name))
 
-    for key in ("video_path", "audio_path", "thumbnail_path", "source_transcript_path", "generated_cover_path"):
+    for key in ("video_path", "audio_path", "thumbnail_path", "source_transcript_path", "source_subtitle_path", "generated_cover_path"):
         state[key] = _replace_root(state.get(key), current, flow)
     state.update(directory=str(root), flow_dir=str(flow), output_dir=str(output), video_title=title)
     atomic_json(flow / "task.json", {

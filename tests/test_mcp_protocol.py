@@ -24,7 +24,7 @@ def test_stdio_initialization_tools_and_readiness(tmp_path):
                 names = {tool.name for tool in listing.tools}
                 assert names == {"check_environment", "start_job", "get_job", "wait_job", "list_jobs", "get_caption_batch", "get_job_context",
                                  "import_translation_reference", "clear_translation_reference", "submit_caption_batch", "set_caption_batch_boundary", "retranscribe_range", "realign_job", "validate_job", "get_cover_source",
-                                 "set_generated_cover", "export_job", "cancel_job", "resume_job"}
+                                 "get_review_issues", "review_issue", "get_review_clip", "set_generated_cover", "export_job", "cancel_job", "resume_job"}
                 schema = next(t.inputSchema for t in listing.tools if t.name == "submit_caption_batch")
                 assert "captions" in schema["properties"]
                 check = await session.call_tool("check_environment", {"model": "/missing/local/model"})

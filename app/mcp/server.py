@@ -88,6 +88,25 @@ def submit_caption_batch(job_id: str, batch_id: str, revision: int, captions: li
 
 
 @mcp.tool()
+def get_review_issues(job_id: str, stage: str = "all", status: str = "pending", offset: int = 0,
+                      limit: int = 25, event_id: int | None = None) -> dict:
+    """Read paginated transcript/caption observations before translation or delivery. Pin event_id on later pages; restart if changed. Pending, retained and resolved reviews survive reconnection. Missing evidence checks are explicit."""
+    return manager.get_review_issues(job_id, stage, status, offset, limit, event_id)
+
+
+@mcp.tool()
+def review_issue(job_id: str, issue_id: str, revision: int, decision: str, note: str, method: str = "text") -> dict:
+    """Record retain/reopen with specific evidence and method (audio/text/reference). Never claim listening without inspecting audio. Changed evidence reopens automatically; structural errors cannot be waived."""
+    return manager.review_issue(job_id, issue_id, revision, decision, note, method)
+
+
+@mcp.tool()
+def get_review_clip(job_id: str, issue_id: str, offset_seconds: float = 0) -> dict:
+    """Extract at most 30 seconds of saved local audio around an observation, with 1 second context. Returns a path and next offset for longer observations; never changes word timing."""
+    return manager.get_review_clip(job_id, issue_id, offset_seconds)
+
+
+@mcp.tool()
 def realign_job(job_id: str, revision: int) -> dict:
     """Explicitly migrate the entire saved transcript to independent acoustic alignment. Preserves word IDs, text and translations only if exact coverage and timing validation pass; otherwise retains originals and diagnostics. Invalidates exports on success; validate and export again. Never shifts times by a guessed offset."""
     return manager.realign_job(job_id, revision)

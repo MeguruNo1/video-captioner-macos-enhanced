@@ -303,6 +303,7 @@ def extract_audio_chunk(
 def detect_speech_ranges(
     audio_path: str | Path,
     threshold: float = 0.5,
+    strict: bool = False,
 ) -> list[tuple[float, float]]:
     try:
         import torch
@@ -318,7 +319,7 @@ def detect_speech_ranges(
         waveform = waveform.float()
         if LOCAL_SILERO_REPO.is_dir() and (LOCAL_SILERO_REPO / "hubconf.py").is_file():
             logger.info("使用本地 Silero VAD: %s", LOCAL_SILERO_REPO)
-            model, utils = torch.hub.load(
+            bundle = torch.hub.load(
                 repo_or_dir=str(LOCAL_SILERO_REPO),
                 model="silero_vad",
                 source="local",
@@ -327,12 +328,17 @@ def detect_speech_ranges(
                 trust_repo=True,
             )
         else:
-            model, utils = torch.hub.load(
+            bundle = torch.hub.load(
                 repo_or_dir="snakers4/silero-vad",
                 model="silero_vad",
                 onnx=True,
                 trust_repo=True,
             )
+        if not isinstance(bundle, (tuple, list)) or len(bundle) != 2:
+            raise RuntimeError("Silero VAD must return a model and utilities")
+        model, utils = bundle
+        if not isinstance(utils, (tuple, list)) or not utils or not callable(utils[0]):
+            raise RuntimeError("Silero VAD speech timestamp function is unavailable")
         get_speech_timestamps = utils[0]
         timestamps = get_speech_timestamps(
             waveform,
@@ -340,15 +346,21 @@ def detect_speech_ranges(
             sampling_rate=MLX_SAMPLE_RATE,
             threshold=float(threshold),
         )
-        return [
-            (
-                item["start"] / MLX_SAMPLE_RATE,
-                item["end"] / MLX_SAMPLE_RATE,
-            )
-            for item in timestamps
-            if item.get("end", 0) > item.get("start", 0)
-        ]
+        if not isinstance(timestamps, (list, tuple)):
+            raise RuntimeError("Silero VAD timestamps must be a sequence")
+        ranges = []
+        for item in timestamps:
+            if not isinstance(item, dict):
+                raise RuntimeError("Invalid Silero VAD interval")
+            start, end = item.get("start"), item.get("end")
+            if not isinstance(start, (int, float)) or not isinstance(end, (int, float)):
+                raise RuntimeError("Silero VAD interval must have numeric endpoints")
+            if end > start:
+                ranges.append((start / MLX_SAMPLE_RATE, end / MLX_SAMPLE_RATE))
+        return ranges
     except Exception as exc:
+        if strict:
+            raise
         logger.warning("MLX VAD 检测失败，回退到普通分块: %s", exc)
         return []
 

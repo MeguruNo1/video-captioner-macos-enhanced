@@ -40,3 +40,14 @@ class MlxVadLocalTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_strict_vad_does_not_disguise_missing_dependency_as_silence():
+    torch = Mock()
+    torchaudio = Mock()
+    torchaudio.load.side_effect = RuntimeError('missing audio backend')
+    with patch.dict('sys.modules', {'torch': torch, 'torchaudio': torchaudio}):
+        import pytest
+        with pytest.raises(RuntimeError, match='missing audio backend'):
+            detect_speech_ranges('audio.wav', strict=True)
+        assert detect_speech_ranges('audio.wav') == []
