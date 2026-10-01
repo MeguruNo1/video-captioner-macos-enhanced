@@ -38,6 +38,8 @@ macOS 默认产物目录为 `~/Movies/VideoCaptioner/<视频名>`，其中 `flow
 
 Codex 关闭后不能继续执行文本翻译；重新打开任务后从已保存批次继续。MCP 不会自行唤醒 Codex 或调用外部翻译服务。
 
+状态查询 `get_job` / `list_jobs` 不改写未变化的任务。返回的 `event_id` 跟踪持久化状态变化，与字幕编辑使用的 `revision` 独立。运行期间使用 `wait_job(job_id, after_event_id, timeout=30)` 等待新状态，最多等待 60 秒；无变化返回精简的 `changed=false`，任务不在运行阶段时立即返回。worker 异常退出仍会被识别为可恢复中断。旧任务没有事件编号时从 0 开始，下一次真正写入后递增。
+
 ## 字幕接口
 
 `get_caption_batch` 返回最多约 160 个词、前后各 25 个上下文词、术语表、批次 ID 和版本。`submit_caption_batch` 的每条字幕使用首尾词 ID（包含端点）、校订原文和译文；必须完整连续覆盖本批。起止时间由服务器读取词锚点计算。相同内容重复提交无副作用；过期版本的不同内容会被拒绝。

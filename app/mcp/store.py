@@ -1,5 +1,6 @@
 """Atomic task snapshots and process-shared locks on POSIX and Windows."""
 from contextlib import contextmanager
+from copy import deepcopy
 import json
 import os
 from pathlib import Path
@@ -77,6 +78,7 @@ class Store:
             raise ValueError("Unknown job ID") from None
 
     def save(self, state):
+        state["event_id"] = state.get("event_id", 0) + 1
         state["updated_at"] = time.time()
         atomic_json(self.path(state["job_id"]), state)
 
@@ -84,5 +86,7 @@ class Store:
     def edit(self, job_id):
         with file_lock(self.path(job_id).with_suffix(".lock")):
             state = self.read(job_id)
+            before = deepcopy(state)
             yield state
-            self.save(state)
+            if state != before:
+                self.save(state)

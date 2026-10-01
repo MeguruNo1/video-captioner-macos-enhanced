@@ -45,8 +45,14 @@ def clear_translation_reference() -> dict:
 
 @mcp.tool()
 def get_job(job_id: str) -> dict:
-    """Read progress, errors, completed batch counts and output paths. Prefer completion notifications; otherwise poll after 10 seconds, back off to 60 seconds while unchanged, reset on phase change."""
+    """Read a persistent checkpoint without rewriting unchanged state. Use event_id with wait_job for subsequent progress; revision is reserved for content edits."""
     return manager.get_job(job_id)
+
+
+@mcp.tool()
+def wait_job(job_id: str, after_event_id: int, timeout: float = 30) -> dict:
+    """Wait up to 60 seconds for a saved change or worker interruption. Unchanged/terminal checkpoints return a compact changed=false response. Event IDs are separate from caption revisions."""
+    return manager.wait_job(job_id, after_event_id, timeout)
 
 
 @mcp.tool()

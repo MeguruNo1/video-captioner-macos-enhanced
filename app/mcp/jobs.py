@@ -118,6 +118,7 @@ class JobManager:
         batches = state.get("batches", [])
         result = {key: state.get(key) for key in ("job_id", "status", "stage", "progress", "message", "error", "directory", "revision", "created_at", "updated_at", "artifacts")}
         result.update(source_language=state["options"]["source_language"], target_language=state["options"]["target_language"],
+                      event_id=state.get("event_id", 0),
                       batch_count=len(batches), completed_batches=sum(bool(b["captions"]) for b in batches),
                       workflow_settings=state["options"].get("workflow_settings", {}),
                       thumbnail_path=state.get("thumbnail_path"),
@@ -131,10 +132,30 @@ class JobManager:
         return result
 
     def get_job(self, job_id):
-        with self.store.edit(job_id) as state:
-            if state["status"] in ACTIVE and not owned_process(state):
-                state.update(status="interrupted", error="Worker stopped. Call resume_job to continue from the last checkpoint.")
-            return self._summary(state)
+        state = self.store.read(job_id)
+        if state["status"] in ACTIVE and not owned_process(state):
+            with self.store.edit(job_id) as state:
+                # A worker may have completed or been replaced before the lock.
+                if state["status"] in ACTIVE and not owned_process(state):
+                    state.update(status="interrupted", error="Worker stopped. Call resume_job to continue from the last checkpoint.")
+        return self._summary(state)
+
+    def wait_job(self, job_id, after_event_id: int, timeout: float = 30):
+        if not isinstance(after_event_id, int) or after_event_id < 0:
+            raise ValueError("after_event_id must be a nonnegative integer")
+        if not 0 <= timeout <= 60:
+            raise ValueError("timeout must be between 0 and 60 seconds")
+        deadline = time.monotonic() + timeout
+        while True:
+            summary = self.get_job(job_id)
+            changed = summary["event_id"] != after_event_id
+            if changed:
+                return dict(summary, changed=True)
+            if summary["status"] not in ACTIVE or time.monotonic() >= deadline:
+                return {key: summary[key] for key in (
+                    "job_id", "event_id", "revision", "status", "stage", "progress"
+                )} | {"changed": False}
+            time.sleep(min(0.25, max(0, deadline - time.monotonic())))
 
     def list_jobs(self, limit=20):
         if not 1 <= limit <= 100:

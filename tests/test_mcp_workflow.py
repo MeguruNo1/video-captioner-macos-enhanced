@@ -693,3 +693,64 @@ def test_complete_validation_report_keeps_all_review_warnings():
     full = validate(state, limit=None)
     assert not full["truncated"]
     assert len(full["warnings"]) == 110
+
+
+def test_reading_status_and_exact_retry_do_not_write(job):
+    manager, job_id = job
+    path = manager.store.path(job_id)
+    before, mtime = path.read_bytes(), path.stat().st_mtime_ns
+    first = manager.get_job(job_id)
+    assert manager.get_job(job_id) == first
+    manager.list_jobs()
+    assert path.read_bytes() == before
+    assert path.stat().st_mtime_ns == mtime
+    batch = manager.get_caption_batch(job_id)
+    args = (job_id, batch['batch_id'], batch['revision'], payload(batch))
+    manager.submit_caption_batch(*args)
+    before, mtime = path.read_bytes(), path.stat().st_mtime_ns
+    assert manager.submit_caption_batch(*args)['idempotent']
+    assert path.read_bytes() == before
+    assert path.stat().st_mtime_ns == mtime
+
+
+def test_wait_events_are_separate_from_caption_revision(job, monkeypatch):
+    manager, job_id = job
+    with manager.store.edit(job_id) as state:
+        state['status'] = 'transcribing'
+    monkeypatch.setattr('app.mcp.jobs.owned_process', lambda state: True)
+    before = manager.get_job(job_id)
+    def update():
+        time.sleep(.05)
+        with manager.store.edit(job_id) as state:
+            state['progress'] = 60
+    worker = threading.Thread(target=update)
+    worker.start()
+    result = manager.wait_job(job_id, before['event_id'], timeout=1)
+    worker.join()
+    assert result['changed']
+    assert result['event_id'] > before['event_id']
+    assert result['revision'] == before['revision']
+    assert result['progress'] == 60
+    path = manager.store.path(job_id)
+    mtime = path.stat().st_mtime_ns
+    assert not manager.wait_job(job_id, result['event_id'], timeout=.02)['changed']
+    assert path.stat().st_mtime_ns == mtime
+    monkeypatch.setattr('app.mcp.jobs.owned_process', lambda state: False)
+    stopped = manager.wait_job(job_id, result['event_id'], timeout=1)
+    assert stopped['changed'] and stopped['status'] == 'interrupted'
+    assert not manager.wait_job(job_id, stopped['event_id'], timeout=60)['changed']
+
+
+def test_legacy_job_without_event_id_is_read_only(job):
+    manager, job_id = job
+    path = manager.store.path(job_id)
+    state = manager.store.read(job_id)
+    state.pop('event_id')
+    atomic_json(path, state)
+    before = path.read_bytes()
+    assert manager.get_job(job_id)['event_id'] == 0
+    assert not manager.wait_job(job_id, 0)['changed']
+    assert path.read_bytes() == before
+    with manager.store.edit(job_id) as current:
+        current['message'] = 'Changed'
+    assert manager.wait_job(job_id, 0)['event_id'] == 1
