@@ -22,7 +22,9 @@
 
 > 使用 videocaptioner 处理 https://www.youtube.com/watch?v=…，英语翻译成简体中文，输出视频及中英文字幕。
 
-默认下载最高可用视频画质；VP9/AV1 自动转为 HEVC，不额外压制硬字幕。输出原文 SRT、中文 SRT、最终视频、Codex 校订后的原文文稿及使用软件当前模板生成的简介文稿。支持 `source_language`、`target_language`、`output_dir`、本地 `model`、`format_selector`、`proxy_url`、`cookie_file`、`initial_prompt` 参数。`source_language=auto` 使用所选后端自动识别。新增 `backend=auto|mlx|whisperx`、`device=auto|cuda|cpu`、`compute_type=auto|float16|int8|…`；MLX 固定使用 Metal 和模型自带精度。
+默认下载最高可用清晰度；同清晰度优先 HEVC、其次 H.264，最后才使用 VP9/AV1 并转为 HEVC，不额外压制硬字幕。显式 `format_selector` 保持用户选择。macOS 原生转码先检查实际媒体资源是否可读且存在视频轨，失败日志保留 NSError 错误链，自动编码器策略下继续尝试 FFmpeg 路线；手动指定编码器失败不静默替换。输出原文 SRT、中文 SRT、最终视频、Codex 校订后的原文文稿及使用软件当前模板生成的简介文稿。支持 `source_language`、`target_language`、`output_dir`、本地 `model`、`format_selector`、`proxy_url`、`cookie_file`、`initial_prompt` 参数。`source_language=auto` 使用所选后端自动识别。新增 `backend=auto|mlx|whisperx`、`device=auto|cuda|cpu`、`compute_type=auto|float16|int8|…`；MLX 固定使用 Metal 和模型自带精度。
+
+新任务固定 `prefer_compatible_codecs=true` 和 `source_subtitle_policy=prefer_manual`。缺少这些字段的旧任务沿用通用格式选择和自动字幕模式；已下载媒体和已保存字幕不因升级而重做。格式筛选使用 [yt-dlp 的格式选择语法](https://github.com/yt-dlp/yt-dlp#format-selection)，仅在最高分辨率内优先兼容编码，4K AV1 不会被 1080p H.264 替代。
 
 每次 `start_job` 都读取软件界面保存的同一份 `settings.json`。代理、下载引擎策略、Cookie 自动刷新及浏览器、H.265 转码编码器和旧版 macOS 原生预设、所选后端、设备、精度和模型/VAD/阈值/分块/热词，以及字幕长度、术语提示和文本后处理开关会保存为任务快照。界面修改自动作用于之后的新任务；运行中的任务保留启动时快照，保证恢复后结果一致。显式空代理表示直连。模型必须已经在本机路径或 Hugging Face 缓存中；缺失时 `check_environment` 会提示，不会自动下载大模型。依赖沿用对应平台的桌面环境。新建 MLX 任务使用 Metal 转录和 WhisperX CPU 独立声学对齐；WhisperX 转录任务继续使用自己的强制对齐。alignment 快照保存对齐方式、设备、模型目录与选择规则、策略及 WhisperX 版本；无快照旧 MLX 任务保留 native 行为。原始转录恢复时必须匹配对齐快照。两条路径都不加载 Qt 或调用翻译 API。WhisperX 的 VAD 和对齐模型可能在首次转录时下载，环境检查仅验证已缓存的转写模型。
 
@@ -46,9 +48,9 @@ Codex 关闭后不能继续执行文本翻译；重新打开任务后从已保�
 
 `get_review_issues(job_id, stage="transcript")` 分页读取翻译前疑点；`stage="caption"` 读取字幕疑点，`status` 可为 pending/retained/resolved/all。每页最多 100 项，后续页传首个结果的 `event_id`；状态变化会拒绝旧分页，避免漏项。`get_review_clip(job_id, issue_id)` 提取该疑点前后各 1 秒、每次最多 30 秒的本地 WAV；长区间用返回的 `next_offset_seconds` 继续。获取片段不代表已经核听。
 
-修复字幕或重新转录后，已消失的检测项自动标为 resolved（仅表示检测项消失，不是声学证明）。确实复核后仍需保留的警告，用 `review_issue(job_id, issue_id, revision, decision="retain", note=具体依据, method="audio|text|reference")` 记录；声学疑点不能只用 text 豁免，结构错误始终必须修复。`decision="reopen"` 重新打开疑点。证据内容改变会生成新指纹并重新等待复核；其他批次的结论保留。记录写入任务状态，导出同时保存在 `flow/review.json`。
+修复字幕或重新转录后，已消失的检测项自动标为 resolved（仅表示检测项消失，不是声学证明）。确实复核后仍需保留的警告，用 `review_issue(job_id, issue_id, revision, decision="retain", note=具体依据, method="audio|text|reference")` 记录；声学疑点不能只用 text 豁免，结构错误始终必须修复。`decision="reopen"` 重新打开疑点。证据内容改变会生成新指纹并重新等待复核；其他批次的结论保留。记录写入任务状态，导出同时保存在 `flow/review.json`。检测策略另有版本号；策略更新后，即使字幕 revision 不变，也会重新派生疑点，证据未变化的复核结论保留。状态读取不会为此改写旧任务，后续编辑或导出时保存新版本。
 
-`get_job.checkpoint` 返回建议的下一步、下一批 ID、疑点统计、证据检查状态和封面状态。恢复聊天后先读取它和 `get_job_context`，再继续复核、未完成批次或导出；不依赖上一次聊天记忆。警告及缺失证据不会被伪装成“已核听”，最终交付仍需披露。
+`get_job.checkpoint` 返回建议的下一步、下一批 ID、疑点统计、证据检查状态和封面状态。恢复聊天后先读取它和 `get_job_context`，再继续复核、未完成批次或导出；不依赖上一次聊天记忆。警告及缺失证据不会被伪装成“已核听”，最终交付仍需披露。`checkpoint`、复核列表、校验及导出返回的 `quality_status` 提供 `active_issue_summary` / `pending_issue_summary`，按类型、严重程度、阶段汇总完整疑点，不受分页限制。`review_complete` 仅表示已检测疑点无待办且字幕齐全，范围由 `review_scope=detected_observations_only` 明示；保留项仍在摘要中。`full_audio_review=not_recorded` 表示程序没有全片核听记录，不能从 `exported=true`、无警告或 resolved 推断核听完成。导出的 `flow/validation.json` 和 `flow/review.json` 保存这些状态。
 
 ## 字幕接口
 
@@ -62,12 +64,12 @@ Codex 关闭后不能继续执行文本翻译；重新打开任务后从已保�
 
 校验保留错误/警告文字，并增加带稳定内容指纹、词范围、时间范围、类型和建议动作的 `issues`。相邻低对齐置信度词合并成一个复核片段。错误仍阻止导出；警告不等于已经核听。
 
-下载阶段会优先取得 YouTube 自动字幕并生成视频文稿，在本地转录前从文稿中匹配维护对照表、提取本视频的候选专名并生成任务热词。命中的对照关系会作为批次 `glossary` 返回，候选词通过 `term_candidates` 返回，供 Codex 校订和翻译。macOS 默认对照表为 `~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Note/Translate/对照.md`，也可通过 `Subtitle.TermGlossaryPath` 修改。Codex 确认并提交的新对应关系会原子追加到文件末尾的 `MCP 自动收录` 管理区，已有手工条目和章节不会被改写。
+下载阶段优先取得同原语言的 YouTube 人工字幕，缺失时按视频语言选择原生自动字幕，避免把其他语言的机器翻译轨当原文；显式语言设置优先于视频语言。参考字幕不可用时保留失败信息，不跨语言凑数。取得字幕后生成视频文稿，在本地转录前从文稿中匹配维护对照表、提取本视频的候选专名并生成任务热词。命中的对照关系会作为批次 `glossary` 返回，候选词通过 `term_candidates` 返回，供 Codex 校订和翻译。macOS 默认对照表为 `~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Note/Translate/对照.md`，也可通过 `Subtitle.TermGlossaryPath` 修改。Codex 确认并提交的新对应关系会原子追加到文件末尾的 `MCP 自动收录` 管理区，已有手工条目和章节不会被改写。
 
 批次同时返回任务的字幕设置。启用“屏蔽原文脏话”“去除译文逗号”或“删除译文全角句号”后，服务端会在保存字幕时执行与界面流程相同的处理，Codex 提示与最终导出不会各自采用不同设置。
 中文译文中的双引号会统一为 `「」`，单引号统一为 `『』`；英文单词内部的撇号保持原样。
 
-`retranscribe_range` 将指定词范围扩展到完整受影响批次，用邻接时间锚点确定音频区间，再用任务快照中的后端转录。受影响批次及词 ID 更换，译文失效；其他已完成批次保留。原始及局部转录分别存档。
+`retranscribe_range` 将指定词范围扩展到完整受影响批次，用邻接时间锚点确定音频区间，再向前后各扩展最多 2 秒上下文（受视频边界限制），用任务快照中的后端转录。完全落在目标区间外的上下文词按声学时间排除；跨越拼接边界的词须与相邻原词连续至少 2 词匹配（忽略大小写和词边标点）、起止锚点差均不超过 250 毫秒，才允许裁去；不能可靠衔接时保留旧数据并提示扩大重转录范围，不按文字猜测删除碎词。通过衔接及时间校验后才更换受影响批次及词 ID、使其译文失效；其他已完成批次保留。原始及局部转录分别存档。
 
 MLX 任务的受影响批次若含连续零时长词，且快照启用了 VAD，局部重转录会仅对此音频区间关闭 VAD，避免重复相同的语音切分；模型、后端及任务快照不变。诊断文件记录实际策略和 VAD 设置。若新结果仍有连续零时长词，则保留原词和字幕并报错，不自动循环重试。单个零时长词不触发此策略；未提供新的提示词时沿用任务提示词。
 
@@ -103,7 +105,7 @@ Windows 在 PowerShell 中使用：
 
 文字正确但有局部提前时，调用 `realign_job(job_id, revision)`。后台使用批次前后文字和音频上下文，对整段词重新做声学对齐，检查精确覆盖及时间顺序，再一次性更新词锚点和已保存字幕；词 ID、校订文字和译文保持不变。它会保存迁移前任务和对齐结果，失败保留原数据。取消或失败后可 `resume_job`；成功后须重新 `validate_job` 和 `export_job`。不平均分配时间，不自动退回旧时间戳。
 
-校验增加低对齐置信度和句首词过长提示；这些只是复核线索，结构通过不表示已核听。导出每条字幕结束时间延长 500 毫秒，受到下一条开始时间和视频总时长限制，不缩短原字幕，不改变词锚点。
+校验保留低对齐置信度提示；句首词过长阈值按字长在 800–1800 毫秒内调整，低置信度词超过 800 毫秒仍提示，避免长单词单凭 800 毫秒门槛产生噪声。阅读速度复用实际导出显示时长及下一条截断规则，中文混英文按半角字母折算，排除标点，并返回显示时长、阅读量和触发原因。校验 `summary` 按类型、严重程度和阶段汇总全部检测项，不受返回条数限制。这些只是复核线索，结构通过不表示已核听。导出每条字幕结束时间延长 500 毫秒，受到下一条开始时间和视频总时长限制，不缩短原字幕，不改变词锚点。
 
 ## 校正字幕作为翻译参考
 
@@ -120,3 +122,14 @@ Windows 在 PowerShell 中使用：
 2026-10-01 验证记录：3000 词固定样本中，分离调用为 45 次，连续精简调用为 24 次，返回数据量减少 27.7%；同一组字幕内容一致。动态分批从 22 批降到 19 批，词覆盖完整且该样本无句内切断。122 项相关测试及 2 项子测试通过，覆盖真实 stdio 重连、事件等待、复核记录、词覆盖、版本冲突、局部重转录、路径迁移和导出恢复。MCP 业务模块 Pyright 零错误；扩大到 MLX 工具和旧测试后仍有 3 项既有诊断。
 
 本机另用约 10 秒的合成语音运行真实 MLX Metal → WhisperX CPU 对齐 → 本地 VAD / 源字幕检查 → 双语字幕导出，26 个词均被识别，校验无错误或警告；输出视频含 H.264 / AAC 轨，完整解码通过且视频哈希与源文件一致。对该样本的副本移除一句 ASR 词后，遗漏检查产生预期疑点，原任务未改动。这不包含远程下载、GPT 封面图像质量、人工核听、长视频或 Windows 实机验收；测试封面使用本地占位图。
+
+## 2026-10-02 真实样本诊断
+
+本轮使用视频 `fb4rh7MOF6c` 的独立测试副本，在 macOS 27.2 上检查以下问题；原任务及交付文件未修改。
+
+- **原生 HEVC 失败**：原 AV1/Opus WebM 在 AVFoundation 中 `readable=false`、`exportable=false`、视频轨数为 0。旧导出返回 `AVFoundationErrorDomain -11800`，底层为 `NSOSStatusErrorDomain -16979`。同一片段只把 AV1/Opus 流封装为 MP4、未重编码，原生 HEVC 导出成功；AV1/AAC MP4 与 H.264/AAC MP4 对照也成功。因此本次定位为 WebM 输入读取问题，不能据此判定本机缺少 AV1 解码或 HEVC 编码能力。新前检可明确拒绝不可读输入，FFmpeg VideoToolbox 兜底及可读 MP4 的原生路线均产出 HEVC/AAC、1080p60，短片段完整解码通过。
+- **字幕语言**：元数据未给出视频 `language`，但包含 21 种配音的 `xx-orig` 字幕。明确标为 `original` 的英文音轨提供源语言；新策略正确选中人工英文 VTT（460 条）。人工 WebVTT 还暴露旧解析器要求固定头块和字幕编号的问题，修复后可生成 39,532 字符文稿并向复核提供全部 460 条参考字幕。没有有效时间字幕时记录为 `unavailable`，不再把 0 条当作检查通过。
+- **下载编码**：本次格式列表没有 HEVC，新策略实际下载 H.264 1080p60 和英文音轨；另验证了本地 MP4 规范化与音视频解码。分辨率优先及 HEVC/H.264 各编码别名的顺序由真实 yt-dlp 格式选择器的离线回归覆盖，没有把不存在的 HEVC 流当成实下载验收。
+- **重转录边缘**：约 38 分钟的片段加上下文后，旧 `issues.` 被识别为前一句的完整 `Virtues.`，按连续邻词与时间锚点排除后保留 180 词，以 `Though` 开头。转录结果保存后，该独立试验进程在退出阶段出现 `libc++ recursive_mutex` 异常（退出码 134）；后续独立读取和边界验证正常。这证明本样本的识别及衔接结果，不代表进程退出稳定性或完整新任务验收通过。
+
+以上没有包含 Windows 实机、逐段核听或新的完整视频翻译验收；结构测试和解码不能替代这些检查。
