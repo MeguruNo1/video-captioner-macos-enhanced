@@ -207,6 +207,8 @@ class JobManager:
                  "cover_required": True,
                  "options": {"url": url, "source_language": source_language, "target_language": target_language,
                              "workflow_version": 2,
+                             "prefer_compatible_codecs": True,
+                             "source_subtitle_policy": "prefer_manual",
                              "caption_batch_policy": dict(ADAPTIVE_BATCH_POLICY),
                              "model": environment["local_model"], "format_selector": format_selector,
                              "backend": selection["backend"], "device": selection["device"],

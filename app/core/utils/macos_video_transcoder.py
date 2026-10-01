@@ -81,10 +81,17 @@ def get_native_video_codec(path: str) -> str:
 
 def _session_error_text(session) -> str:
     error = session.error()
-    if not error:
-        return ""
-    localized = error.localizedDescription()
-    return str(localized or error)
+    details = []
+    # NSError's localized description alone often hides the actual decoder or
+    # container failure. Limit traversal in case an error chain is cyclic.
+    for _ in range(5):
+        if not error:
+            break
+        reason = error.localizedFailureReason()
+        details.append(f"{error.domain()} ({error.code()}): {error.localizedDescription()}"
+                       + (f"; {reason}" if reason else ""))
+        error = (error.userInfo() or {}).get("NSUnderlyingError")
+    return " <- ".join(details)
 
 
 def _native_hevc_export_preset(av, preset_name: str):
@@ -108,20 +115,32 @@ def transcode_video_to_hevc_native(
     output_file: str,
     progress_callback: Callable[[int, str], None] | None = None,
     preset_name: str = NATIVE_HEVC_PRESET_HIGHEST_QUALITY,
+    cancel_check: Callable[[], None] | None = None,
 ) -> str:
     input_path = Path(input_file)
     output_path = Path(output_file)
     if not input_path.is_file():
         raise FileNotFoundError(f"输入视频不存在: {input_file}")
+    if input_path.resolve() == output_path.resolve():
+        raise ValueError("原生 HEVC 输出不能覆盖输入文件")
     if not is_native_hevc_transcode_supported():
         raise RuntimeError("当前环境不支持 macOS 原生 HEVC 转码")
 
     av, _cm, foundation = _load_frameworks()
+    asset = _asset_for_path(str(input_path))
+    video_tracks = asset.tracksWithMediaType_(av.AVMediaTypeVideo)
+    if not asset.isReadable() or not asset.isExportable() or not video_tracks:
+        raise RuntimeError(
+            f"AVFoundation 无法读取或导出输入媒体（容器={input_path.suffix.lower()}，"
+            f"readable={bool(asset.isReadable())}，exportable={bool(asset.isExportable())}，"
+            f"video_tracks={len(video_tracks or [])}）；请使用 FFmpeg 转码"
+        )
+    if cancel_check:
+        cancel_check()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if output_path.exists():
         output_path.unlink()
 
-    asset = _asset_for_path(str(input_path))
     preset = _native_hevc_export_preset(av, preset_name)
     session = av.AVAssetExportSession.alloc().initWithAsset_presetName_(asset, preset)
     if session is None:
@@ -142,11 +161,19 @@ def transcode_video_to_hevc_native(
     session.exportAsynchronouslyWithCompletionHandler_(lambda: completed.set())
 
     last_progress = -1
-    while not completed.wait(0.25):
-        progress = max(0, min(99, int(float(session.progress()) * 100)))
-        if progress_callback and progress != last_progress:
-            progress_callback(progress, "正在使用 macOS 原生 API 转码为 H.265")
-            last_progress = progress
+    try:
+        while not completed.wait(0.25):
+            if cancel_check:
+                cancel_check()
+            progress = max(0, min(99, int(float(session.progress()) * 100)))
+            if progress_callback and progress != last_progress:
+                progress_callback(progress, "正在使用 macOS 原生 API 转码为 H.265")
+                last_progress = progress
+        if cancel_check:
+            cancel_check()
+    except Exception:
+        session.cancelExport()
+        raise
 
     status = session.status()
     if status != av.AVAssetExportSessionStatusCompleted or not output_path.is_file():

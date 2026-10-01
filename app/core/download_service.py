@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import threading
 import time
+from urllib.parse import parse_qs, urlparse
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, Self, cast, overload
 
@@ -488,40 +489,92 @@ def normalize_preview_data(url: str, info_dict: dict, thumbnail_bytes: bytes | N
     }
 
 
+def _subtitle_language(value: object) -> str:
+    return str(value or "").strip().lower().replace("_", "-").removesuffix("-orig")
+
+
+def _subtitle_candidates(info_dict: dict, mode: str, language: str | None) -> list[dict]:
+    """Select source-language tracks; never use auto-translated caption URLs."""
+    automatic = info_dict.get("automatic_captions") or {}
+    requested = _subtitle_language(language)
+    if requested in {"", "auto", "und"}:
+        requested = _subtitle_language(info_dict.get("language"))
+        if requested in {"", "auto", "und"}:
+            # Multi-dub videos expose many xx-orig caption tracks: use the
+            # original audio marker, never bitrate or dictionary ordering.
+            original_audio = set()
+            for item in info_dict.get("formats") or []:
+                note = str(item.get("format_note") or "").lower()
+                if item.get("language_preference") == 10 or ("original" in note and "dubbed" not in note):
+                    value = _subtitle_language(item.get("language"))
+                    if value and value not in {"auto", "und"}:
+                        original_audio.add(value)
+            requested = next(iter(original_audio)) if len(original_audio) == 1 else ""
+        if not requested:
+            # YouTube labels the original ASR track xx-orig even when translated
+            # tracks for hundreds of languages precede it in the dictionary.
+            originals = {_subtitle_language(key) for key in automatic if key.endswith("-orig")}
+            requested = next(iter(originals)) if len(originals) == 1 else ""
+        if not requested:
+            native_languages = set()
+            for key, entries in automatic.items():
+                for item in entries:
+                    query = parse_qs(urlparse(item.get("url", "")).query)
+                    if query.get("lang") and not query.get("tlang"):
+                        native_languages.add(_subtitle_language(query["lang"][0]))
+            requested = next(iter(native_languages)) if len(native_languages) == 1 else ""
+    if not requested:
+        manual_languages = {
+            _subtitle_language(key) for key, entries in (info_dict.get("subtitles") or {}).items()
+            if any(item.get("url") and not parse_qs(urlparse(item["url"]).query).get("tlang") for item in entries)
+        }
+        requested = next(iter(manual_languages)) if len(manual_languages) == 1 else ""
+    if not requested:
+        return []  # Ambiguous language is safer than a reference in another language.
+    candidates = []
+    seen_urls = set()
+    seen_tracks = set()
+    for kind in (["manual", "auto"] if mode == "prefer_manual" else [mode]):
+        source = info_dict.get("subtitles" if kind == "manual" else "automatic_captions") or {}
+        keys = sorted(source, key=lambda key: (
+            _subtitle_language(key) != requested, not key.endswith("-orig"), key
+        ))
+        for key in keys:
+            normalized = _subtitle_language(key)
+            if (kind, normalized) in seen_tracks:
+                continue
+            if normalized != requested and normalized.split("-")[0] != requested.split("-")[0]:
+                continue
+            entries = sorted(source[key] or [], key=lambda item: (
+                {"vtt": 0, "srt": 1, "ttml": 2}.get(item.get("ext"), 9)
+            ))
+            for item in entries:
+                url = item.get("url")
+                if not url or url in seen_urls:
+                    continue
+                # HLS entries are playlists, not standalone subtitle text.
+                if "m3u8" in str(item.get("protocol") or "") or urlparse(url).path.endswith(".m3u8"):
+                    continue
+                query = parse_qs(urlparse(url).query)
+                if query.get("tlang"):
+                    continue
+                if kind == "auto" and query.get("lang"):
+                    original = _subtitle_language(query["lang"][0])
+                    if original.split("-")[0] != requested.split("-")[0]:
+                        continue
+                seen_urls.add(url)
+                seen_tracks.add((kind, normalized))
+                candidates.append({"url": url, "ext": item.get("ext") or "vtt",
+                                   "language": normalized, "track": key, "kind": kind})
+                break  # A different encoding of the same track is not a useful 429 retry.
+    return candidates
+
+
 def _pick_subtitle_item(
     info_dict: dict, subtitle_mode: str, subtitle_language: str | None
 ) -> tuple[str | None, str]:
-    sources = (
-        info_dict.get("subtitles", {})
-        if subtitle_mode == "manual"
-        else info_dict.get("automatic_captions", {})
-    )
-    if not sources:
-        return None, "vtt"
-
-    preferred_keys = []
-    if subtitle_language:
-        preferred_keys.append(subtitle_language)
-        preferred_keys.extend(
-            [key for key in sources.keys() if key.startswith(subtitle_language)]
-        )
-
-    candidate_keys = preferred_keys + list(sources.keys())
-    seen = set()
-    for key in candidate_keys:
-        if key in seen or key not in sources:
-            continue
-        seen.add(key)
-        entries = sources.get(key) or []
-        if not entries:
-            continue
-        item = entries[-1]
-        url = item.get("url")
-        ext = item.get("ext") or "vtt"
-        if url:
-            return url, ext
-
-    return None, "vtt"
+    candidates = _subtitle_candidates(info_dict, subtitle_mode, subtitle_language)
+    return (candidates[0]["url"], candidates[0]["ext"]) if candidates else (None, "vtt")
 
 
 def _download_subtitle_fallback(
@@ -801,6 +854,27 @@ def _robust_format_selector(selector: str, download_mode: str = "video_audio") -
             "bv*+ba/bestvideo+bestaudio/best",
         )
     return selector
+
+
+def _resolution_first_format_selector(info_dict: dict, download_mode: str) -> str:
+    """Prefer HEVC/AVC only within the highest available resolution tier."""
+    fallback = _robust_format_selector("", download_mode)
+    if download_mode == "audio":
+        return fallback
+    heights = [float(item.get("height") or 0) for item in info_dict.get("formats", [])
+               if item.get("vcodec") not in (None, "none")]
+    height = max(heights, default=0)
+    if height <= 0:
+        return fallback
+    tier = f"[height={height:g}]"
+    selectors = []
+    for codec in ("[vcodec~='^(hevc|h265|hvc1|hev1)']", "[vcodec~='^(avc|h264)']", ""):
+        video = f"bv*{tier}{codec}"
+        if download_mode == "video":
+            selectors.append(video)
+        else:
+            selectors.extend((f"{video}+ba", f"b{tier}{codec}"))
+    return "/".join([*selectors, fallback])
 
 
 def _create_youtube_dl(options: dict[str, Any]) -> yt_dlp.YoutubeDL:
@@ -1325,11 +1399,13 @@ class VideoDownloadService:
         cancel_event=None,
         native_hevc_preset: str = "highest_quality",
         hevc_encoder: str = "auto",
+        prefer_compatible_codecs: bool = True,
     ):
         self.proxy_url = proxy_url
         self.cookie_file = cookie_file
         self.native_hevc_preset = native_hevc_preset
         self.hevc_encoder = hevc_encoder
+        self.prefer_compatible_codecs = prefer_compatible_codecs
         # Qt's signals are provided by the wrapper; plain services use callbacks.
         for name in ("finished", "detailed_finished", "progress", "progress_detail", "error", "cancelled"):
             if not hasattr(self, name):
@@ -1339,7 +1415,7 @@ class VideoDownloadService:
         self.need_video = need_video
         self.need_subtitle = need_subtitle
         self.need_thumbnail = need_thumbnail
-        self.subtitle_mode = subtitle_mode if subtitle_mode in {"manual", "auto"} else "auto"
+        self.subtitle_mode = subtitle_mode if subtitle_mode in {"manual", "auto", "prefer_manual"} else "auto"
         self.subtitle_language = str(subtitle_language or "en").strip().lower()
         self.download_engine_strategy = download_engine_strategy
         self.download_mode = download_mode
@@ -1728,6 +1804,9 @@ class VideoDownloadService:
         return self._default_format_selector()
 
     def _effective_format_selector_for_info(self, info_dict: dict) -> str:
+        if (self.prefer_compatible_codecs and not self.format_selector
+                and not self.selected_video_format_id and not self.selected_audio_format_id):
+            return _resolution_first_format_selector(info_dict, self.download_mode)
         if not info_dict.get("_videocaptioner_youtube_player_client"):
             return self._effective_format_selector()
 
@@ -1881,6 +1960,7 @@ class VideoDownloadService:
                     str(target_path),
                     progress_callback=self.progress.emit,
                     preset_name=self.native_hevc_preset,
+                    cancel_check=self._raise_if_terminated,
                 )
                 return (
                     str(target_path),
@@ -1890,6 +1970,8 @@ class VideoDownloadService:
                     None,
                     None,
                 )
+            except DownloadCancelledError:
+                raise
             except Exception as exc:
                 native_error = exc
                 logger.exception("macOS 原生 H.265 后处理失败，改用 FFmpeg 重试: %s", exc)
@@ -1970,7 +2052,10 @@ class VideoDownloadService:
         work_dir.mkdir(parents=True, exist_ok=True)
         self._raise_if_terminated()
 
-        subtitle_language = str(subtitle_language or "en").strip().lower()
+        subtitle_language = str(subtitle_language or "auto").strip().lower()
+        subtitle_candidates = _subtitle_candidates(info_dict, subtitle_mode, subtitle_language)
+        selected_subtitle = None
+        subtitle_attempted = False
 
         subtitle_download_link = None
         subtitle_ext = "vtt"
@@ -1980,6 +2065,9 @@ class VideoDownloadService:
             if resume_existing and effective_need_subtitle
             else None
         )
+        if subtitle_mode == "prefer_manual":
+            # A legacy filename does not prove which language/source produced it.
+            subtitle_path = None
         if subtitle_path:
             logger.info("继续下载时复用已完成字幕: %s", subtitle_path)
 
@@ -1989,9 +2077,28 @@ class VideoDownloadService:
             )
 
         fallback_proxy = proxy_url if self.proxy_url is not None else (proxy_url or get_effective_download_proxy_url())
+        if subtitle_mode == "prefer_manual" and effective_need_subtitle:
+            subtitle_attempted = True
+            for candidate in subtitle_candidates:
+                self._raise_if_terminated()
+                try:
+                    reference_path = work_dir / "subtitle" / f"【下载字幕】_{candidate['language']}_{candidate['kind']}"
+                    saved_path = reference_path.with_suffix(f".{candidate['ext']}")
+                    if resume_existing and saved_path.is_file() and saved_path.stat().st_size:
+                        subtitle_path = str(saved_path)
+                    else:
+                        subtitle_path = _download_subtitle_fallback(
+                            candidate["url"], candidate["ext"], reference_path, fallback_proxy,
+                        )
+                    if subtitle_path:
+                        selected_subtitle = candidate
+                        break
+                except requests.RequestException as exc:
+                    logger.warning("%s %s 字幕下载失败，尝试下一条原语言轨: %s",
+                                   candidate["kind"], candidate["language"], exc)
         transcript_txt_path = (
             _find_reusable_transcript_path(work_dir, title)
-            if resume_existing and need_transcript_txt
+            if resume_existing and need_transcript_txt and subtitle_mode != "prefer_manual"
             else None
         )
         transcript_message = "已复用" if transcript_txt_path else "未触发"
@@ -2008,7 +2115,7 @@ class VideoDownloadService:
                 except Exception as exc:
                     logger.exception("复用字幕生成视频文稿失败: %s", exc)
                     transcript_message = f"复用字幕生成视频文稿失败，稍后重试: {exc}"
-            else:
+            elif not subtitle_attempted:
                 self.progress.emit(2, self._message_text("提前下载字幕并生成视频文稿..."))
                 try:
                     subtitle_path = _download_subtitle_fallback(
@@ -2029,7 +2136,7 @@ class VideoDownloadService:
                     transcript_message = f"提前生成视频文稿失败，稍后重试: {exc}"
             self._raise_if_terminated()
 
-        ydl_need_subtitle = effective_need_subtitle and not subtitle_path
+        ydl_need_subtitle = effective_need_subtitle and not subtitle_path and not subtitle_attempted and bool(subtitle_candidates)
         options = _build_ydl_options(
             proxy_url, active_cookiefile_path, progress_hooks=[self.progress_hook]
         )
@@ -2047,7 +2154,7 @@ class VideoDownloadService:
                 },
                 "writesubtitles": ydl_need_subtitle and subtitle_mode == "manual",
                 "writeautomaticsub": ydl_need_subtitle and subtitle_mode == "auto",
-                "subtitleslangs": [subtitle_language],
+                "subtitleslangs": [subtitle_candidates[0]["track"]] if subtitle_candidates else [],
                 "writethumbnail": need_thumbnail,
                 "thumbnail_format": "png",
                 "skip_download": not need_video,
@@ -2148,10 +2255,10 @@ class VideoDownloadService:
             media_files = [str(target_path)]
             mp4_normalization_message = f"已将回退格式转换为 MP4（{encoder}）"
         media_path = media_files[0] if len(media_files) == 1 else (str(work_dir) if media_files else None)
-        if not subtitle_path:
+        if not subtitle_path and not subtitle_attempted:
             subtitle_path = _find_reusable_subtitle_path(work_dir, subtitle_language)
 
-        if effective_need_subtitle and not subtitle_path:
+        if effective_need_subtitle and not subtitle_path and not subtitle_attempted:
             subtitle_path = _download_subtitle_fallback(
                 subtitle_download_link,
                 subtitle_ext,
@@ -2219,6 +2326,8 @@ class VideoDownloadService:
                     preferred_media_path = transcoded_video_path
                 elif mp4_normalization_message:
                     postprocess_message = mp4_normalization_message
+            except DownloadCancelledError:
+                raise
             except Exception as exc:
                 logger.exception("PR智能预设后处理失败: %s", exc)
                 postprocess_message = f"H.265 后处理失败: {exc}"
@@ -2245,6 +2354,9 @@ class VideoDownloadService:
             "postprocess_fallback_source_path": postprocess_fallback_source_path,
             "postprocess_fallback_target_path": postprocess_fallback_target_path,
             "subtitle_path": subtitle_path,
+            "subtitle_language": selected_subtitle["language"] if selected_subtitle else None,
+            "subtitle_kind": selected_subtitle["kind"] if selected_subtitle else None,
+            "subtitle_track": selected_subtitle["track"] if selected_subtitle else None,
             "thumbnail_path": thumbnail_path,
             "metadata_path": metadata_path,
             "description_txt_path": description_txt_path,
@@ -2256,7 +2368,7 @@ class VideoDownloadService:
             "work_dir": str(work_dir),
             "url": self.url,
             "download_mode": self.download_mode,
-            "format_selector": self._effective_format_selector() if need_video else "",
+            "format_selector": str(options.get("format") or "") if need_video else "",
             "download_sections": list(download_sections or []),
             "has_multiple_media_files": multi_media,
         }

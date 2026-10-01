@@ -144,6 +144,8 @@ def test_start_job_snapshots_current_desktop_settings(tmp_path, monkeypatch):
     result = manager.start_job("https://example.com/video", output_dir=str(tmp_path / "output"))
     state = manager.store.read(result["job_id"])
     options = state["options"]
+    assert options["source_subtitle_policy"] == "prefer_manual"
+    assert options["prefer_compatible_codecs"] is True
     assert options["download_engine_strategy"] == "多线程"
     assert options["native_hevc_preset"] == "balanced_4k"
     assert options["initial_prompt"] == "configured prompt"
@@ -325,10 +327,12 @@ def test_retranscribe_replaces_only_affected_batches(job, monkeypatch):
     assert updated["revision"] == state["revision"] + 1
 
 
-def test_native_mlx_no_whisperx_and_distinct_cache():
+def test_native_mlx_no_whisperx_and_distinct_cache(tmp_path):
     from app.core.bk_asr.mlx_whisper import MLXWhisperASR
-    native = MLXWhisperASR(b"audio", alignment_method="native")
-    old = MLXWhisperASR(b"audio")
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"audio")
+    native = MLXWhisperASR(str(audio), alignment_method="native")
+    old = MLXWhisperASR(str(audio))
     assert native._get_key() != old._get_key()
     mlx = Mock()
     mlx.transcribe.return_value = {"segments": [{"text": "Hello", "start": 0, "end": 1}]}

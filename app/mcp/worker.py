@@ -14,6 +14,13 @@ from .store import Store, atomic_json, file_lock
 from .review import prepare_evidence, reconcile_review
 
 
+def _same_reference_language(detected, reference):
+    def base(value):
+        return str(value or "").strip().lower().replace("_", "-").split("-")[0]
+    language = base(detected)
+    return language not in {"", "auto", "und"} and language == base(reference)
+
+
 class Revoked(Exception):
     pass
 
@@ -83,10 +90,11 @@ class Worker:
                 self.stage("downloading", message="Downloading video")
                 from app.core.download_service import VideoDownloadService
                 service = VideoDownloadService(options["url"], str(directory / "download"),
-                           need_subtitle=True, subtitle_mode="auto",
-                           subtitle_language=options["source_language"] if options["source_language"] != "auto" else "en",
+                           need_subtitle=True, subtitle_mode=options.get("source_subtitle_policy", "auto"),
+                           subtitle_language=options["source_language"],
                            need_transcript_txt=True, need_thumbnail=True,
                            format_selector=options["format_selector"],
+                           prefer_compatible_codecs=options.get("prefer_compatible_codecs", False),
                            download_engine_strategy=options.get("download_engine_strategy"),
                            pr_smart_transcode_hevc_on_av1=True,
                            description_txt_template=options.get("description_txt_template"),
@@ -94,8 +102,8 @@ class Worker:
                            native_hevc_preset=options.get("native_hevc_preset", "highest_quality"),
                            proxy_url=options["proxy_url"], cookie_file=options["cookie_file"],
                            progress_callback=lambda p, m: self.update(progress=p, message=m))
-                result = service.download(need_subtitle=True, subtitle_mode="auto",
-                                          subtitle_language=options["source_language"] if options["source_language"] != "auto" else "en",
+                result = service.download(need_subtitle=True, subtitle_mode=options.get("source_subtitle_policy", "auto"),
+                                          subtitle_language=options["source_language"],
                                           need_transcript_txt=True, need_thumbnail=True, resume_existing=True,
                                           pr_smart_transcode_hevc_on_av1=True)
                 if result.get("postprocess_failed"):
@@ -126,7 +134,9 @@ class Worker:
                                       thumbnail_path=result.get("thumbnail_path"),
                                       source_transcript_path=transcript_path,
                                       source_subtitle_path=result.get("subtitle_path"),
-                                      source_subtitle_language=options["source_language"] if options["source_language"] != "auto" else "en",
+                                      source_subtitle_language=result.get("subtitle_language"),
+                                      source_subtitle_kind=result.get("subtitle_kind"),
+                                      source_subtitle_track=result.get("subtitle_track"),
                                       term_candidates=term_data["candidates"], base_glossary=term_data["glossary"],
                                       glossary=term_data["glossary"], options=options)
                     _, directory, _ = ensure_job_layout(live_state)
@@ -182,7 +192,8 @@ class Worker:
                     evidence = prepare_evidence(audio, current.get("source_subtitle_path"),
                         threshold=options.get("vad_threshold", .5),
                         local_silero_dir=options.get("local_silero_dir"),
-                        compare_subtitles=detected != "auto" and detected == current.get("source_subtitle_language", options["source_language"]))
+                        compare_subtitles=_same_reference_language(
+                            detected, current.get("source_subtitle_language", options["source_language"])))
                     atomic_json(directory / "review-evidence.json", evidence)
                     self.update(review_evidence=evidence)
             with self.store.edit(self.job_id) as current:

@@ -3,6 +3,9 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+from unittest.mock import Mock
+
+import pytest
 
 from app.core.utils import macos_video_transcoder
 
@@ -22,6 +25,12 @@ class _FakeAsset:
     def tracksWithMediaType_(self, _media_type):
         return self._tracks
 
+    def isReadable(self):
+        return bool(self._tracks)
+
+    def isExportable(self):
+        return bool(self._tracks)
+
 
 class _FakeSession:
     def __init__(self, status, file_type, output_bytes=b"hevc"):
@@ -40,6 +49,7 @@ class _FakeSession:
         pass
 
     def exportAsynchronouslyWithCompletionHandler_(self, handler):
+        assert self._output_url is not None
         Path(self._output_url).write_bytes(self._output_bytes)
         handler()
 
@@ -103,6 +113,7 @@ class MacOSVideoTranscoderTests(unittest.TestCase):
             progress_events = []
 
             av = SimpleNamespace(
+                AVMediaTypeVideo="video",
                 AVAssetExportPresetHEVCHighestQuality="HEVC_HQ",
                 AVFileTypeMPEG4="public.mpeg-4",
                 AVAssetExportSessionStatusCompleted=3,
@@ -115,7 +126,7 @@ class MacOSVideoTranscoderTests(unittest.TestCase):
             with patch.object(macos_video_transcoder.sys, "platform", "darwin"), patch.object(
                 macos_video_transcoder, "_load_frameworks", return_value=(av, SimpleNamespace(), foundation)
             ), patch.object(
-                macos_video_transcoder, "_asset_for_path", return_value=object()
+                macos_video_transcoder, "_asset_for_path", return_value=_FakeAsset([_FakeTrack([])])
             ):
                 result = macos_video_transcoder.transcode_video_to_hevc_native(
                     str(input_path),
@@ -134,6 +145,7 @@ class MacOSVideoTranscoderTests(unittest.TestCase):
             input_path.write_bytes(b"input")
 
             av = SimpleNamespace(
+                AVMediaTypeVideo="video",
                 AVAssetExportPresetHEVCHighestQuality="HEVC_HQ",
                 AVAssetExportPresetHEVC3840x2160="HEVC_4K",
                 AVFileTypeMPEG4="public.mpeg-4",
@@ -154,7 +166,7 @@ class MacOSVideoTranscoderTests(unittest.TestCase):
                 "_load_frameworks",
                 return_value=(av, SimpleNamespace(), foundation),
             ), patch.object(
-                macos_video_transcoder, "_asset_for_path", return_value=object()
+                macos_video_transcoder, "_asset_for_path", return_value=_FakeAsset([_FakeTrack([])])
             ):
                 macos_video_transcoder.transcode_video_to_hevc_native(
                     str(input_path),
@@ -167,3 +179,54 @@ class MacOSVideoTranscoderTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_unreadable_asset_is_rejected_before_deleting_output(tmp_path):
+    source, target = tmp_path / "source.webm", tmp_path / "target.mp4"
+    source.write_bytes(b"source")
+    target.write_bytes(b"existing")
+    av = SimpleNamespace(AVMediaTypeVideo="video")
+    with (patch.object(macos_video_transcoder, "is_native_hevc_transcode_supported", return_value=True),
+          patch.object(macos_video_transcoder, "_load_frameworks", return_value=(av, None, None)),
+          patch.object(macos_video_transcoder, "_asset_for_path", return_value=_FakeAsset([]))):
+        with pytest.raises(RuntimeError, match=r"readable=False.*video_tracks=0"):
+            macos_video_transcoder.transcode_video_to_hevc_native(str(source), str(target))
+    assert target.read_bytes() == b"existing"
+    assert source.read_bytes() == b"source"
+
+
+def test_native_error_preserves_domain_code_and_underlying_reason():
+    inner = Mock()
+    inner.domain.return_value = "NSOSStatusErrorDomain"
+    inner.code.return_value = -16979
+    inner.localizedDescription.return_value = "Cannot read media"
+    inner.localizedFailureReason.return_value = None
+    inner.userInfo.return_value = {}
+    outer = Mock()
+    outer.domain.return_value = "AVFoundationErrorDomain"
+    outer.code.return_value = -11800
+    outer.localizedDescription.return_value = "Operation failed"
+    outer.localizedFailureReason.return_value = "Underlying error"
+    outer.userInfo.return_value = {"NSUnderlyingError": inner}
+    session = Mock()
+    session.error.return_value = outer
+    text = macos_video_transcoder._session_error_text(session)
+    assert "AVFoundationErrorDomain (-11800)" in text
+    assert "NSOSStatusErrorDomain (-16979)" in text
+
+
+def test_cancellation_stops_native_export(tmp_path):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"input")
+    session = Mock()
+    session.supportedFileTypes.return_value = ["mp4"]
+    av = SimpleNamespace(AVMediaTypeVideo="video", AVAssetExportPresetHEVCHighestQuality="HQ",
+                         AVFileTypeMPEG4="mp4", AVAssetExportSession=_FakeExportSessionFactory(session))
+    foundation = SimpleNamespace(NSURL=SimpleNamespace(fileURLWithPath_=lambda value: value))
+    cancel = Mock(side_effect=[None, RuntimeError("cancelled")])
+    with (patch.object(macos_video_transcoder, "is_native_hevc_transcode_supported", return_value=True),
+          patch.object(macos_video_transcoder, "_load_frameworks", return_value=(av, None, foundation)),
+          patch.object(macos_video_transcoder, "_asset_for_path", return_value=_FakeAsset([_FakeTrack([])]))):
+        with pytest.raises(RuntimeError, match="cancelled"):
+            macos_video_transcoder.transcode_video_to_hevc_native(str(source), str(tmp_path / "out.mp4"), cancel_check=cancel)
+    session.cancelExport.assert_called_once()
