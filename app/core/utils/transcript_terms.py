@@ -370,10 +370,6 @@ def _resolve_current_llm_settings() -> dict[str, Any]:
         base_url = cfg.qwen_api_base.value
         api_key = cfg.qwen_api_key.value
         model = cfg.qwen_model.value
-    elif current_service == LLMServiceEnum.PUBLIC:
-        base_url = cfg.public_api_base.value
-        api_key = cfg.public_api_key.value
-        model = cfg.public_model.value
     else:
         base_url = ""
         api_key = ""

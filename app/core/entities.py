@@ -81,7 +81,6 @@ class LLMServiceEnum(Enum):
     GEMINI = "Gemini"
     CHATGLM = "ChatGLM"
     QWEN = "Qwen"
-    PUBLIC = "软件公益模型"
 
 
 class TranscribeModelEnum(Enum):

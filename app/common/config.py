@@ -213,9 +213,9 @@ class Config(QConfig):
     llm_service = OptionsConfigItem(
         "LLM",
         "LLMService",
-        LLMServiceEnum.PUBLIC,
+        LLMServiceEnum.OPENAI,
         OptionsValidator(LLMServiceEnum),
-        EnumSerializer(LLMServiceEnum),
+        LegacyEnumSerializer(LLMServiceEnum, fallback=LLMServiceEnum.OPENAI),
     )
 
     openai_model = ConfigItem("LLM", "OpenAI_Model", "gpt-4o-mini")
@@ -258,7 +258,6 @@ class Config(QConfig):
         "LLM", "ChatGLM_API_Base", "https://open.bigmodel.cn/api/paas/v4"
     )
 
-    # 公益模型
     qwen_model = ConfigItem("LLM", "Qwen_Model", "qwen-plus")
     qwen_api_key = ConfigItem("LLM", "Qwen_API_Key", "")
     qwen_api_base = ConfigItem(
@@ -268,11 +267,6 @@ class Config(QConfig):
         "LLM", "Qwen_Enable_Thinking", True, BoolValidator()
     )
 
-    public_model = ConfigItem("LLM", "Public_Model", "gpt-4o-mini")
-    public_api_key = ConfigItem(
-        "LLM", "Public_API_Key", "please-do-not-use-for-personal-purposes"
-    )
-    public_api_base = ConfigItem("LLM", "Public_API_Base", "https://ddg.bkfeng.top/v1")
     llm_request_timeout = RangeConfigItem(
         "LLM", "RequestTimeout", 300, RangeValidator(30, 900)
     )

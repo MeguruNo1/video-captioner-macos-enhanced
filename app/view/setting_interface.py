@@ -924,14 +924,6 @@ class SettingInterface(ScrollArea):
                 "default_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
                 "default_models": ["qwen-plus", "qwen-turbo", "qwen-max"],
             },
-            LLMServiceEnum.PUBLIC: {
-                "prefix": "public",
-                "api_key_cfg": cfg.public_api_key,
-                "api_base_cfg": cfg.public_api_base,
-                "model_cfg": cfg.public_model,
-                "default_base": "https://api.public-model.com/v1",
-                "default_models": ["public-model"],
-            },
         }
 
         # 创建服务配置映射
@@ -940,16 +932,6 @@ class SettingInterface(ScrollArea):
         # 为每个服务创建配置卡片
         for service, config in service_configs.items():
             prefix = config["prefix"]
-
-            # 如果是公益模型，只添加配置不创建卡片
-            if service == LLMServiceEnum.PUBLIC:
-                self.llm_service_configs[service] = {
-                    "cards": [],
-                    "api_base": None,
-                    "api_key": None,
-                    "model": None,
-                }
-                continue
 
             # 创建API Key卡片
             api_key_card = LineEditSettingCard(
@@ -1471,27 +1453,21 @@ class SettingInterface(ScrollArea):
         if not service_config:
             return
 
-        # 如果是公益模型，使用配置文件中的值
-        if current_service == LLMServiceEnum.PUBLIC:
-            api_base = cfg.public_api_base.value
-            api_key = cfg.public_api_key.value
-            model = cfg.public_model.value
-        else:
-            api_base = (
-                service_config["api_base"].lineEdit.text()
-                if service_config["api_base"]
-                else ""
-            )
-            api_key = (
-                service_config["api_key"].lineEdit.text()
-                if service_config["api_key"]
-                else ""
-            )
-            model = (
-                service_config["model"].comboBox.currentText()
-                if service_config["model"]
-                else ""
-            )
+        api_base = (
+            service_config["api_base"].lineEdit.text()
+            if service_config["api_base"]
+            else ""
+        )
+        api_key = (
+            service_config["api_key"].lineEdit.text()
+            if service_config["api_key"]
+            else ""
+        )
+        model = (
+            service_config["model"].comboBox.currentText()
+            if service_config["model"]
+            else ""
+        )
         qwen_enable_thinking = (
             service_config.get("qwen_thinking").isChecked()
             if service_config and service_config.get("qwen_thinking")

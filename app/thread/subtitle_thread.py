@@ -15,9 +15,6 @@ from app.core.entities import (
     TargetLanguageEnum,
 )
 from app.core.utils.logger import setup_logger
-from app.core.storage.cache_manager import ServiceUsageManager
-from app.core.storage.database import DatabaseManager
-from app.config import CACHE_PATH
 
 # 配置日志
 logger = setup_logger("subtitle_optimization_thread")
@@ -34,7 +31,6 @@ class SubtitleThread(QThread):
     update = pyqtSignal(dict)
     update_all = pyqtSignal(dict)
     error = pyqtSignal(str)
-    MAX_DAILY_LLM_CALLS = 30
 
     def __init__(self, task: SubtitleTask):
         super().__init__()
@@ -50,9 +46,6 @@ class SubtitleThread(QThread):
             "completion_tokens": 0,
             "total_tokens": 0,
         }
-        # 初始化数据库和服务使用管理器
-        self.db_manager = DatabaseManager(CACHE_PATH)
-        self.service_manager = ServiceUsageManager(self.db_manager)
 
     def set_input_data(self, data):
         """Freeze edited rows without overwriting the imported subtitle file."""
@@ -70,22 +63,6 @@ class SubtitleThread(QThread):
 
     def _setup_api_config(self) -> SubtitleConfig:
         """设置API配置，返回SubtitleConfig"""
-        public_base_url = "https://ddg.bkfeng.top/v1"
-        if self.task.subtitle_config.base_url == public_base_url:
-            # 检查是否可以使用服务
-
-            if not self.service_manager.check_service_available(
-                "llm", self.MAX_DAILY_LLM_CALLS
-            ):
-                raise Exception(
-                    self.tr(
-                        f"公益LLM服务已达到每日使用限制 {self.MAX_DAILY_LLM_CALLS} 次，建议使用自己的API"
-                    )
-                )
-            self.task.subtitle_config.thread_num = 5
-            self.task.subtitle_config.batch_size = 10
-            return self.task.subtitle_config
-
         if self.task.subtitle_config.base_url and self.task.subtitle_config.api_key:
             from app.core.utils.test_opanai import test_openai
 
@@ -102,9 +79,6 @@ class SubtitleThread(QThread):
                         "（字幕断句或字幕修正需要大模型）\nLLM API 测试失败, 请检查LLM配置"
                     )
                 )
-            # 增加服务使用次数
-            if self.task.subtitle_config.base_url == public_base_url:
-                self.service_manager.increment_usage("llm", self.MAX_DAILY_LLM_CALLS)
             return self.task.subtitle_config
         else:
             raise Exception(
@@ -139,7 +113,7 @@ class SubtitleThread(QThread):
             if subtitle_config.need_split and not asr_data.is_word_timestamp():
                 asr_data.split_to_word_segments()
 
-            # 获取API配置，会先检查可用性（优先使用设置的API，其次使用自带的公益API）
+            # 验证当前任务配置的 LLM 服务
             if (
                 subtitle_config.need_optimize
                 or asr_data.is_word_timestamp()
