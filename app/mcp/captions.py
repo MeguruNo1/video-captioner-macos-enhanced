@@ -1,4 +1,6 @@
 """Deterministic word anchoring and subtitle validation; no language model calls."""
+import hashlib
+import json
 import math
 import re
 from uuid import uuid4
@@ -20,7 +22,7 @@ def has_collapsed_word_run(words):
     return False
 
 
-def words_from_result(result, prefix="w", offset=0):
+def words_from_result(result, prefix="w", offset: float = 0):
     words = []
     for segment in result.get("segments", []):
         raw_words = segment.get("words") or []
@@ -76,7 +78,7 @@ def anchor_captions(words, captions):
     for caption in captions:
         start = index.get(caption.get("start_word_id"))
         end = index.get(caption.get("end_word_id"))
-        if start != cursor or end is None or end < start:
+        if start is None or start != cursor or end is None or end < start:
             raise ValueError("Caption word ranges must cover this batch exactly once, in order")
         source, translation = caption.get("source", ""), caption.get("translation", "")
         if not isinstance(source, str) or not source.strip() or not isinstance(translation, str) or not translation.strip():
@@ -128,64 +130,124 @@ def extend_export_captions(captions, duration_ms=None, extension_ms=500):
     return result
 
 
-def validate(state, limit=100):
-    errors, warnings = [], []
-    if not state.get("words"):
-        errors.append("No transcript available")
+def review_issue(code, severity, message, words=(), *, stage="transcript", batch_id=None,
+                 evidence=None, start_ms=None, end_ms=None):
+    """Content-addressed issues: a changed observation must be reviewed again."""
+    evidence = evidence or {}
+    start = start_ms if start_ms is not None else (words[0]["start_ms"] if words else None)
+    end = end_ms if end_ms is not None else (words[-1]["end_ms"] if words else None)
+    fingerprint = json.dumps([code, words, evidence, start, end], sort_keys=True, ensure_ascii=False)
+    return {"id": hashlib.sha256(fingerprint.encode()).hexdigest()[:24], "code": code,
+            "severity": severity, "stage": stage, "message": message,
+            "start_word_id": words[0]["id"] if words else None,
+            "end_word_id": words[-1]["id"] if words else None,
+            "start_ms": start, "end_ms": end, "batch_id": batch_id,
+            "suggested_action": "review_audio" if stage == "transcript" else "revise_caption",
+            "evidence": evidence}
+
+
+def validate(state, limit: int | None = 100, phase="delivery", batch_id=None):
+    """Separate transcript, local caption and full delivery checks."""
+    if phase not in {"transcript", "batch", "delivery"}:
+        raise ValueError("Unknown validation phase")
+    issues = []
+    words = state.get("words", [])
+    batches = state.get("batches", [])
+    if phase == "batch":
+        position = next((i for i, b in enumerate(batches) if b["id"] == batch_id), None)
+        if position is None:
+            raise ValueError("Unknown batch ID")
+        batches = batches[max(0, position - 1):position + 2]
+        # Include neighboring saved captions, so both crossing edges are checked.
+        first, last = batch_words(state, batches[0])[0], batch_words(state, batches[-1])[-1]
+        ids = {w["id"]: i for i, w in enumerate(words)}
+        words = words[ids[first["id"]]:ids[last["id"]] + 1]
+    if not words:
+        issues.append(review_issue("no_transcript", "error", "No transcript available"))
     duration = state.get("duration_ms")
     previous_start = -1
-    for word in state.get("words", []):
+    low_run = []
+    def flush_low_run():
+        if low_run:
+            issues.append(review_issue("low_alignment", "warning",
+                f"Low alignment confidence; review audio: {low_run[0]['id']} -> {low_run[-1]['id']}",
+                list(low_run)))
+            low_run.clear()
+    for word in words:
         start, end = word["start_ms"], word["end_ms"]
         if start < 0 or end < start or start < previous_start or (duration and end > duration + 100):
-            errors.append(f"Invalid word timing: {word['id']}")
+            issues.append(review_issue("invalid_word_timing", "error", f"Invalid word timing: {word['id']}", [word]))
         elif end == start:
-            warnings.append(f"Zero-duration ASR word; review its containing caption: {word['id']}")
+            issues.append(review_issue("zero_duration", "warning",
+                f"Zero-duration ASR word; review its containing caption: {word['id']}", [word]))
         if end - start > 3000:
-            warnings.append(f"Unusually long word: {word['id']}")
+            issues.append(review_issue("long_word", "warning", f"Unusually long word: {word['id']}", [word]))
         score = word.get("alignment_score")
         if isinstance(score, (int, float)) and score < 0.3:
-            warnings.append(f"Low alignment confidence; review audio: {word['id']}")
+            if low_run and start - low_run[-1]["end_ms"] > 500:
+                flush_low_run()
+            low_run.append(word)
+        else:
+            flush_low_run()
         previous_start = start
-    word_index = {word["id"]: word for word in state.get("words", [])}
+    flush_low_run()
+    word_index = {word["id"]: word for word in words}
     previous_end = -1
     previous_caption = None
-    for batch in state.get("batches", []):
+    for batch in ([] if phase == "transcript" else batches):
         if not batch["captions"]:
-            errors.append(f"Untranslated batch: {batch['id']}")
+            if phase == "delivery":
+                issues.append(review_issue("untranslated_batch", "error", f"Untranslated batch: {batch['id']}",
+                    batch_words(state, batch), stage="delivery", batch_id=batch["id"]))
+            previous_end, previous_caption = -1, None
             continue
+        selected = batch_words(state, batch)
         try:
-            captions = anchor_captions(batch_words(state, batch), batch["captions"])
+            captions = anchor_captions(selected, batch["captions"])
         except ValueError as exc:
-            errors.append(f"{batch['id']}: {exc}")
+            issues.append(review_issue("invalid_caption", "error", f"{batch['id']}: {exc}", selected,
+                stage="caption", batch_id=batch["id"], evidence={"captions": batch["captions"]}))
+            previous_end, previous_caption = -1, None
             continue
         for caption in captions:
             start, end = caption["start_ms"], caption["end_ms"]
             first_word = word_index[caption["start_word_id"]]
+            last_word = word_index[caption["end_word_id"]]
+            span = [first_word, last_word] if first_word != last_word else [first_word]
+            def add(code, severity, message, evidence=None):
+                issues.append(review_issue(code, severity, message, span, stage="caption",
+                    batch_id=batch["id"], evidence=evidence or {"caption": caption}))
             if first_word["end_ms"] - first_word["start_ms"] > 800:
-                warnings.append(f"Long caption-initial word; check early onset: {first_word['id']}")
+                add("early_onset", "warning", f"Long caption-initial word; check early onset: {first_word['id']}")
             if start < previous_end:
-                errors.append(f"Overlapping captions at {caption['start_word_id']}")
+                add("overlapping_captions", "error", f"Overlapping captions at {caption['start_word_id']}",
+                    {"previous": previous_caption, "caption": caption})
             if previous_caption and 0 <= start - previous_end <= 300:
                 for field in ("source", "translation"):
                     if (re.search(r"(?:\.{3,}|…+)\s*$", previous_caption[field])
                             and re.match(r"\s*(?:\.{3,}|…+)", caption[field])):
-                        warnings.append(
+                        add("artificial_ellipsis", "warning",
                             f"Review artificial ellipsis split: {previous_caption['start_word_id']} -> "
                             f"{caption['start_word_id']}; continuous speech may need one caption. "
-                            "Batch boundaries do not justify ellipses."
-                        )
+                            "Batch boundaries do not justify ellipses.",
+                            {"previous": previous_caption, "caption": caption})
                         break
             text = caption["translation"]
             cjk = bool(re.search(r"[\u3400-\u9fff]", text))
             units = len(re.sub(r"\s", "", text))
             if end - start > 7000 or units > (42 if cjk else 84) or units / ((end-start)/1000) > (12 if cjk else 22):
-                warnings.append(f"Review reading length/speed: {caption['start_word_id']}")
-            previous_end = end
-            previous_caption = caption
-        warnings.extend(f"{batch['id']}: {note}" for note in batch.get("notes", []))
-    return {"valid": not errors, "errors": errors[:limit], "warnings": warnings[:limit],
+                add("reading_speed", "warning", f"Review reading length/speed: {caption['start_word_id']}")
+            previous_end, previous_caption = end, caption
+        for note in batch.get("notes", []):
+            issues.append(review_issue("caption_note", "warning", f"{batch['id']}: {note}", selected,
+                stage="caption", batch_id=batch["id"], evidence={"note": note}))
+    errors = [issue["message"] for issue in issues if issue["severity"] == "error"]
+    warnings = [issue["message"] for issue in issues if issue["severity"] == "warning"]
+    return {"valid": not errors, "phase": phase, "errors": errors[:limit], "warnings": warnings[:limit],
+            "issues": issues[:limit], "issue_count": len(issues),
             "error_count": len(errors), "warning_count": len(warnings),
-            "truncated": limit is not None and (len(errors) > limit or len(warnings) > limit)}
+            "pending_batches": sum(not b["captions"] for b in state.get("batches", [])),
+            "truncated": limit is not None and len(issues) > limit}
 
 
 def timestamp(ms):

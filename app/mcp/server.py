@@ -62,22 +62,29 @@ def list_jobs(limit: int = 20) -> list[dict]:
 
 
 @mcp.tool()
-def get_caption_batch(job_id: str, batch_id: str | None = None) -> dict:
-    """Read next untranslated batch (or a specific batch), immutable word IDs, original timestamps, context and glossary."""
-    return manager.get_caption_batch(job_id, batch_id)
+def get_job_context(job_id: str) -> dict:
+    """Read fixed media background and subtitle rules once before compact batches, or after context loss/version change. Also includes the current complete glossary and candidates; no credentials."""
+    return manager.get_job_context(job_id)
 
 
 @mcp.tool()
-def set_caption_batch_boundary(job_id: str, batch_id: str, revision: int, end_word_id: str) -> dict:
-    """Before caption submission, move the boundary with the next unsubmitted batch to a semantic break. end_word_id is inclusive and must belong to either batch. Move an incomplete tail to the next batch or bring its continuation into this one. Both batches must be unsubmitted; each resulting batch is limited to 320 words. Word IDs/timestamps and other batches stay unchanged. Fetch the updated batch after success or a stale revision error."""
-    return manager.set_caption_batch_boundary(job_id, batch_id, revision, end_word_id)
+def get_caption_batch(job_id: str, batch_id: str | None = None, compact: bool = False) -> dict:
+    """Read next untranslated batch (or a specific batch), immutable word IDs, original timestamps, context and glossary. Read get_job_context once then use compact=true for relevant terms without repeating fixed background."""
+    return manager.get_caption_batch(job_id, batch_id, compact)
+
+
+@mcp.tool()
+def set_caption_batch_boundary(job_id: str, batch_id: str, revision: int, end_word_id: str, compact: bool = False) -> dict:
+    """Before caption submission, move the boundary with the next unsubmitted batch to a semantic break. end_word_id is inclusive and must belong to either batch. Move an incomplete tail to the next batch or bring its continuation into this one. Both batches must be unsubmitted; each resulting batch is limited to 320 words. Word IDs/timestamps and other batches stay unchanged. Success returns the updated batch; fetch again after a stale revision error."""
+    return manager.set_caption_batch_boundary(job_id, batch_id, revision, end_word_id, compact)
 
 
 @mcp.tool()
 def submit_caption_batch(job_id: str, batch_id: str, revision: int, captions: list[Caption],
-                         glossary: dict[str, str] | None = None, notes: list[str] | None = None) -> dict:
-    """Save Codex's proofreading, semantic segments and translations. Cover batch words exactly once with inclusive continuous ID ranges. Time is computed locally. Exact retries are idempotent; changed stale revisions are rejected. Notes record uncertain transcription."""
-    return manager.submit_caption_batch(job_id, batch_id, revision, [c.model_dump() for c in captions], glossary, notes)
+                         glossary: dict[str, str] | None = None, notes: list[str] | None = None,
+                         return_next_batch: bool = False, compact: bool = False) -> dict:
+    """Save Codex's proofreading, semantic segments and translations. Cover batch words exactly once with inclusive continuous ID ranges. Time is computed locally. Exact retries are idempotent; changed stale revisions are rejected. Notes record uncertain transcription. Local validation covers this batch and neighboring edges; pending work is not an error. return_next_batch=true returns the next batch atomically with this save; compact=true reduces repeated background."""
+    return manager.submit_caption_batch(job_id, batch_id, revision, [c.model_dump() for c in captions], glossary, notes, return_next_batch, compact)
 
 
 @mcp.tool()

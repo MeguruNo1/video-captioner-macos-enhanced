@@ -22,7 +22,7 @@ def test_stdio_initialization_tools_and_readiness(tmp_path):
                 await session.initialize()
                 listing = await session.list_tools()
                 names = {tool.name for tool in listing.tools}
-                assert names == {"check_environment", "start_job", "get_job", "wait_job", "list_jobs", "get_caption_batch",
+                assert names == {"check_environment", "start_job", "get_job", "wait_job", "list_jobs", "get_caption_batch", "get_job_context",
                                  "import_translation_reference", "clear_translation_reference", "submit_caption_batch", "set_caption_batch_boundary", "retranscribe_range", "realign_job", "validate_job", "get_cover_source",
                                  "set_generated_cover", "export_job", "cancel_job", "resume_job"}
                 schema = next(t.inputSchema for t in listing.tools if t.name == "submit_caption_batch")

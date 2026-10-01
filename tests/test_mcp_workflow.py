@@ -687,8 +687,8 @@ def test_alignment_policy_rejects_implementation_drift():
 
 
 def test_complete_validation_report_keeps_all_review_warnings():
-    state = {"words": [{"id": f"w{i}", "text": "x", "start_ms": i*100,
-                       "end_ms": i*100+50, "alignment_score": .1} for i in range(110)], "batches": []}
+    state = {"words": [{"id": f"w{i}", "text": "x", "start_ms": i*1000,
+                       "end_ms": i*1000+50, "alignment_score": .1} for i in range(110)], "batches": []}
     assert validate(state)["truncated"]
     full = validate(state, limit=None)
     assert not full["truncated"]
@@ -754,3 +754,82 @@ def test_legacy_job_without_event_id_is_read_only(job):
     with manager.store.edit(job_id) as current:
         current['message'] = 'Changed'
     assert manager.wait_job(job_id, 0)['event_id'] == 1
+
+
+def test_submit_chains_batches_atomically_and_retry_returns_current_revision(job):
+    manager, job_id = job
+    with manager.store.edit(job_id) as state:
+        state['batches'] = make_batches(state['words'][:2]) + make_batches(state['words'][2:])
+    first = manager.get_caption_batch(job_id, compact=True)
+    args = (job_id, first['batch_id'], first['revision'], payload(first))
+    result = manager.submit_caption_batch(*args, return_next_batch=True, compact=True)
+    assert result['validation']['valid']
+    assert result['validation']['pending_batches'] == 1
+    assert not result['captions_complete']
+    following = result['next_batch']
+    assert following['revision'] == result['revision']
+    assert following['batch_id'] != first['batch_id']
+    saved = manager.store.read(job_id)
+    retried = manager.submit_caption_batch(*args, return_next_batch=True, compact=True)
+    assert retried['next_batch'] == following
+    assert manager.store.read(job_id) == saved
+    result = manager.submit_caption_batch(job_id, following['batch_id'], following['revision'],
+        payload(following), return_next_batch=True, compact=True)
+    assert result['next_batch']['done'] and result['captions_complete']
+    assert manager.validate_job(job_id)['valid']
+
+
+def test_compact_context_preserves_settings_and_relevant_terms(job):
+    manager, job_id = job
+    with manager.store.edit(job_id) as state:
+        state['glossary'] = {'Hello': '你好', 'world': '世界', 'Unused Name': '其他'}
+        state['term_candidates'] = ['Hello', 'Unused Name']
+        state['options']['workflow_settings'] = {'subtitle': {'max_word_count_cjk': 18}}
+    full = manager.get_caption_batch(job_id)
+    compact = manager.get_caption_batch(job_id, compact=True)
+    context = manager.get_job_context(job_id)
+    assert compact['context_version'] == context['context_version']
+    assert context['workflow_settings'] == full['workflow_settings']
+    assert compact['words'] == full['words']
+    assert compact['glossary'] == {'Hello': '你好', 'world': '世界'}
+    assert compact['term_candidates'] == ['Hello']
+    assert 'metadata' not in compact and 'workflow_settings' not in compact
+    assert len(json.dumps(compact)) < len(json.dumps(full))
+    with manager.store.edit(job_id) as state:
+        state['options']['workflow_settings']['subtitle']['max_word_count_cjk'] = 20
+    assert manager.get_job_context(job_id)['context_version'] != context['context_version']
+
+
+def test_boundary_response_contains_updated_batch(job):
+    manager, job_id = job
+    batch = continuity_job(job)
+    result = manager.set_caption_batch_boundary(job_id, batch['batch_id'], batch['revision'], 'w000164', compact=True)
+    assert result['batch'] == manager.get_caption_batch(job_id, compact=True)
+
+
+def test_local_validation_checks_crossing_edge_and_excludes_pending_batches(job):
+    manager, job_id = job
+    with manager.store.edit(job_id) as state:
+        state['words'][1]['end_ms'] = 1100
+        state['batches'] = make_batches(state['words'][:2]) + make_batches(state['words'][2:])
+    first = manager.get_caption_batch(job_id)
+    manager.submit_caption_batch(job_id, first['batch_id'], first['revision'], payload(first))
+    second = manager.get_caption_batch(job_id)
+    result = manager.submit_caption_batch(job_id, second['batch_id'], second['revision'], payload(second))
+    assert any(i['code'] == 'overlapping_captions' for i in result['new_issues'])
+    assert not manager.export_job(job_id)['exported']
+
+
+def test_transcript_preflight_groups_adjacent_low_confidence(job):
+    manager, job_id = job
+    state = manager.store.read(job_id)
+    for word in state['words'][:2]:
+        word['alignment_score'] = .1
+    report = validate(state, phase='transcript')
+    assert report['valid'] and report['pending_batches'] == 1
+    assert len(report['issues']) == 1
+    issue = report['issues'][0]
+    assert issue['start_word_id'] == 'w000000' and issue['end_word_id'] == 'w000001'
+    assert issue['start_ms'] == 0 and issue['end_ms'] == 900
+    state['words'][0]['alignment_score'] = .9
+    assert validate(state, phase='transcript')['issues'][0]['id'] != issue['id']

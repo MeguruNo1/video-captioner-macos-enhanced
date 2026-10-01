@@ -44,6 +44,12 @@ Codex 关闭后不能继续执行文本翻译；重新打开任务后从已保�
 
 `get_caption_batch` 返回最多约 160 个词、前后各 25 个上下文词、术语表、批次 ID 和版本。`submit_caption_batch` 的每条字幕使用首尾词 ID（包含端点）、校订原文和译文；必须完整连续覆盖本批。起止时间由服务器读取词锚点计算。相同内容重复提交无副作用；过期版本的不同内容会被拒绝。
 
+先调用 `get_job_context` 读取视频背景、字幕规则和完整术语表，再使用 `get_caption_batch(..., compact=true)` 获取相关术语、候选词、翻译例句和相邻已完成字幕，避免反复发送固定背景。批次的 `context_version` 变化或聊天丢失上下文后，重新读取背景。
+
+`submit_caption_batch(..., return_next_batch=true, compact=true)` 在保存时直接返回 `next_batch`，其 revision 与本次保存一致；到末尾返回 `done=true`。重复提交仍幂等，恢复时返回当前版本的下一批。边界调整成功返回更新后的 `batch`，无需再读一次。提交结果中的 `validation` 只检查当前及相邻批次，不把未完成批次当错误；`new_issues` 列出新增疑点，`captions_complete` 仅表示字幕已齐全，不表示封面和最终导出已完成。完整交付仍须 `validate_job` 和 `export_job`。
+
+校验保留错误/警告文字，并增加带稳定内容指纹、词范围、时间范围、类型和建议动作的 `issues`。相邻低对齐置信度词合并成一个复核片段。错误仍阻止导出；警告不等于已经核听。
+
 下载阶段会优先取得 YouTube 自动字幕并生成视频文稿，在本地转录前从文稿中匹配维护对照表、提取本视频的候选专名并生成任务热词。命中的对照关系会作为批次 `glossary` 返回，候选词通过 `term_candidates` 返回，供 Codex 校订和翻译。macOS 默认对照表为 `~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Note/Translate/对照.md`，也可通过 `Subtitle.TermGlossaryPath` 修改。Codex 确认并提交的新对应关系会原子追加到文件末尾的 `MCP 自动收录` 管理区，已有手工条目和章节不会被改写。
 
 批次同时返回任务的字幕设置。启用“屏蔽原文脏话”“去除译文逗号”或“删除译文全角句号”后，服务端会在保存字幕时执行与界面流程相同的处理，Codex 提示与最终导出不会各自采用不同设置。
