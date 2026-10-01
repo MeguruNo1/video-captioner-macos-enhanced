@@ -31,7 +31,7 @@ This README documents this fork. The package of the same name on PyPI belongs to
 - **Editing safeguards:** Merge consecutive subtitle rows, process current edits, and prevent file replacement during active tasks. API keys are masked by default.
 - **Translation:** The desktop app uses your own cloud or local LLM service; the bundled public model has been removed; the Codex workflow proofreads and translates in the current conversation.
 - Import paired corrected SRT files as style references for future Codex translations. New jobs snapshot the reference and return relevant bilingual examples per batch without changing timestamps.
-- **Automation:** Local MCP + Skill delivers video, subtitles, transcripts, descriptions and covers, with resumable jobs and partial re-transcription.
+- **Automation:** Local MCP + Skill delivers video, subtitles, transcripts, descriptions and covers, with event waiting, compact chained caption batches, adaptive boundaries, pre-translation checks, persistent review and resumable jobs. Covers can be prepared during transcription; partial re-transcription preserves other batches.
 
 ## macOS: Build It Yourself
 
