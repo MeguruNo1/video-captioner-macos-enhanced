@@ -51,6 +51,8 @@ $PyInstallerArguments = @(
     '--windowed'
     '--runtime-hook', (Join-Path $PSScriptRoot 'windows_runtime_hook.py')
     '--copy-metadata', 'torchcodec'
+    '--recursive-copy-metadata', 'whisperx'
+    '--collect-all', 'pyannote.audio'
     '--name', $AppName
     '--distpath', $PyInstallerDist
     '--workpath', $BuildRoot

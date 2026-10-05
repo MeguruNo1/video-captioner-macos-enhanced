@@ -62,6 +62,8 @@ bash "$PROJECT_ROOT/scripts/build_macos_app.sh" >/dev/null
     --collect-all whisperx \
     --collect-all mlx_whisper \
     --collect-all mlx \
+    --collect-all pyannote.audio \
+    --recursive-copy-metadata whisperx \
     --copy-metadata torchcodec \
     --hidden-import whisperx \
     --hidden-import mlx_whisper \
