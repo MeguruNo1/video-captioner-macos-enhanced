@@ -1,0 +1,114 @@
+name: Build Windows installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Package version (X.Y.Z)
+        required: true
+        default: '1.4.1'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    env:
+      PACKAGE_VERSION: ${{ inputs.version }}
+      PIP_DISABLE_PIP_VERSION_CHECK: '1'
+      PYTHONUTF8: '1'
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - name: Install Python dependencies (CPU runtime)
+        run: |
+          python -m venv .venv
+          if ($LASTEXITCODE -ne 0) { throw 'Creating venv failed' }
+          & .\.venv\Scripts\python.exe -m pip install --upgrade pip setuptools wheel
+          if ($LASTEXITCODE -ne 0) { throw 'Installing build tools failed' }
+          & .\.venv\Scripts\python.exe -m pip install torch==2.8.0 torchaudio==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cpu
+          if ($LASTEXITCODE -ne 0) { throw 'Installing CPU PyTorch failed' }
+          & .\.venv\Scripts\python.exe -m pip install -r requirements-windows.txt whisperx==3.8.6 pyinstaller==6.22.3 pytest
+          if ($LASTEXITCODE -ne 0) { throw 'Installing application dependencies failed' }
+          & .\.venv\Scripts\python.exe -m pip check
+          if ($LASTEXITCODE -ne 0) { throw 'Dependency consistency check failed' }
+          New-Item -ItemType Directory -Path dist/windows/release -Force | Out-Null
+          & .\.venv\Scripts\python.exe -m pip freeze | Set-Content dist/windows/release/build-dependencies.txt
+      - name: Prepare bundled FFmpeg and installer compiler
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'ffmpeg.zip'
+          Invoke-WebRequest https://github.com/GyanD/codexffmpeg/releases/download/7.1.1/ffmpeg-7.1.1-full_build-shared.zip -OutFile $archive
+          $expanded = Join-Path $env:RUNNER_TEMP 'ffmpeg'
+          Expand-Archive $archive $expanded
+          $ffmpegRoot = (Get-ChildItem $expanded -Directory | Select-Object -First 1).FullName
+          New-Item -ItemType Directory resource/bin/windows -Force | Out-Null
+          Copy-Item "$ffmpegRoot/bin/*" resource/bin/windows -Recurse
+          Copy-Item "$ffmpegRoot/LICENSE*" resource/bin/windows
+          Copy-Item "$ffmpegRoot/README*" resource/bin/windows
+          $env:PATH = "$pwd/resource/bin/windows;$env:PATH"
+          & resource/bin/windows/ffmpeg.exe -version
+          if ($LASTEXITCODE -ne 0) { throw 'FFmpeg check failed' }
+          & .\.venv\Scripts\python.exe -c "import torch, torchaudio, torchvision, whisperx, ctranslate2; print('ASR runtime imports OK'); print('Torch:', torch.__version__); print('CPU precisions:', ctranslate2.get_supported_compute_types('cpu'))"
+          if ($LASTEXITCODE -ne 0) { throw 'ASR runtime import check failed' }
+          $setup = Join-Path $env:RUNNER_TEMP 'innosetup.exe'
+          Invoke-WebRequest https://github.com/jrsoftware/issrc/releases/download/is-6_6_1/innosetup-6.6.1.exe -OutFile $setup
+          if ((Get-FileHash $setup -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'd243ce440c02705530699554fb9612b9b2bd7a2a90629cdb7f41e66f5faeb91f') { throw 'Inno Setup checksum mismatch' }
+          $compilerRoot = Join-Path $env:RUNNER_TEMP 'inno'
+          $install = Start-Process $setup -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=$compilerRoot") -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw 'Installing Inno Setup failed' }
+          "INNO_COMPILER=$compilerRoot/ISCC.exe" | Out-File $env:GITHUB_ENV -Append
+      - name: Check Windows platform regressions
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          & .\.venv\Scripts\python.exe -m pytest -q tests/test_windows_release_script.py tests/test_platform_support.py tests/test_desktop_notification.py
+          if ($LASTEXITCODE -ne 0) { throw 'Windows regression checks failed' }
+      - name: Build portable package and installer
+        run: |
+          ./scripts/build_windows_release.ps1 -Version $env:PACKAGE_VERSION
+          ./scripts/build_windows_installer.ps1 -Version $env:PACKAGE_VERSION -CompilerPath $env:INNO_COMPILER
+      - name: Verify installed application and uninstaller
+        run: ./scripts/test_windows_package.ps1 -Version $env:PACKAGE_VERSION
+      - name: Collect failure diagnostics
+        if: failure()
+        run: |
+          New-Item -ItemType Directory dist/windows/diagnostics -Force | Out-Null
+          if (Test-Path "$env:LOCALAPPDATA/VideoCaptioner/logs") { Copy-Item "$env:LOCALAPPDATA/VideoCaptioner/logs/*" dist/windows/diagnostics -Recurse }
+          if (Test-Path dist/windows/release) { Copy-Item dist/windows/release/*.log dist/windows/diagnostics -ErrorAction SilentlyContinue }
+          Add-Type -AssemblyName System.Windows.Forms
+          Add-Type -AssemblyName System.Drawing
+          $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bitmap = [System.Drawing.Bitmap]::new($bounds.Width, $bounds.Height)
+          $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+          try {
+            $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+            $bitmap.Save("$pwd/dist/windows/diagnostics/failure.png", [System.Drawing.Imaging.ImageFormat]::Png)
+          } finally { $graphics.Dispose(); $bitmap.Dispose() }
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-build-diagnostics
+          path: dist/windows/diagnostics/*
+          retention-days: 3
+      - name: Upload packages and verification evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: VideoCaptioner-Windows-x64-v${{ inputs.version }}
+          path: dist/windows/release/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3

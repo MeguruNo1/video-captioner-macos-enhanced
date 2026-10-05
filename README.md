@@ -12,14 +12,14 @@
 
 ## 发行计划与当前状态
 
-**Windows 计划提供打包 EXE；macOS 采用用户自行构建的方式。**
+**Windows 通过 GitHub Actions 构建安装 EXE 和便携 ZIP；macOS 采用用户自行构建的方式。**
 
 | 平台 | 发行方式 | 当前状态 |
 | --- | --- | --- |
-| Windows | 计划提供可直接使用的 EXE 分发包 | 已恢复桌面源码入口；EXE 打包与 Windows 实机验收尚未完成，目前按下文从源码运行 |
+| Windows x64 | 安装 EXE 和便携 ZIP | 已提供手动构建工作流；以对应运行的结果、产物及 `verification.json` 为准，真实媒体转录和 CUDA 验收需另行完成 |
 | macOS（Apple Silicon） | 用户安装依赖后，自行构建 App | 已有源码运行、本地 App 启动器和独立 App / DMG 构建脚本 |
 
-后续 Windows EXE 将通过本仓库的 [Releases 页面](https://github.com/MeguruNo1/video-captioner-macos-enhanced/releases)发布，具体依赖和使用步骤以届时的发行说明为准。历史 macOS DMG 不作为后续主要安装入口。
+Windows 构建产物从本仓库的 [Actions 页面](https://github.com/MeguruNo1/video-captioner-macos-enhanced/actions)下载；工作流不会自动创建正式 Release。后续正式发行通过 [Releases 页面](https://github.com/MeguruNo1/video-captioner-macos-enhanced/releases)发布。历史 macOS DMG 不作为后续主要安装入口。
 
 本 README 面向本分支。PyPI 上的同名包属于上游，安装它不会获得这里的增强功能。
 
@@ -85,9 +85,31 @@ scripts/build_macos_release.sh
 
 文件名版本取自脚本的 `DEFAULT_VERSION`，不表示当前最新发行版本。产物仍需要系统 FFmpeg，且不内置转写模型或用户配置。脚本使用临时签名（ad-hoc），未进行 Apple 公证。
 
-## Windows：目前从源码运行
+## Windows：安装包与源码运行
 
-EXE 发布前，先安装 **Python 3.12（64 位）、Git 和 FFmpeg**，确认 `ffmpeg`、`ffprobe` 已加入 `PATH`（可执行程序搜索路径）。在 PowerShell 中执行：
+### 安装包
+
+在 Actions 中选择 **Build Windows installer → Run workflow**，填写版本号（如 `1.4.1`）。成功后下载该次运行的 artifact：
+
+- `VideoCaptioner-Windows-x64-vX.Y.Z-Setup.exe`：当前用户安装，无需管理员权限，提供开始菜单入口和卸载程序。
+- `VideoCaptioner-Windows-x64-vX.Y.Z.zip`：解压后运行目录中的 `VideoCaptioner.exe`。
+- `.sha256`、`build-dependencies.txt`、`verification.json` 和界面截图：校验文件、实际依赖版本及本次安装/启动/卸载检查记录。
+
+两种包均包含 Python、CPU 版 WhisperX 依赖和 FFmpeg 7.1.1，不包含模型、用户配置或 Codex MCP 服务。首次转录需要下载模型；此 CPU 构建不提供 CUDA 加速，安装 EXE 尚未进行代码签名。版本号是包版本，源码以该次运行的 commit 为准。
+
+已登录 GitHub CLI 的用户可以在 Mac 上手动触发 Windows 构建：
+
+```sh
+gh workflow run build-windows.yml -R MeguruNo1/video-captioner-macos-enhanced -f version=1.4.1
+```
+
+`workflow run` 触发配置中的 `workflow_dispatch`（手动运行事件）；`-R`（`--repo`）指定仓库，`-f`（`--raw-field`）传入版本号。只有手动触发才构建，产物保留 3 天。重复使用同一版本号不代表产物相同，应核对源码 commit 和 SHA-256。
+
+本地 Windows 构建先准备 `.venv` 和 `resource/bin/windows` 中的 FFmpeg/ffprobe，再运行 `scripts/build_windows_release.ps1`；安装 EXE 另需 Inno Setup 6，运行 `scripts/build_windows_installer.ps1`。输出均在 `dist/windows/release/`。
+
+### 源码运行
+
+安装 **Python 3.12（64 位）、Git 和 FFmpeg**，确认 `ffmpeg`、`ffprobe` 已加入 `PATH`（可执行程序搜索路径）。在 PowerShell 中执行：
 
 ```powershell
 git clone https://github.com/MeguruNo1/video-captioner-macos-enhanced.git

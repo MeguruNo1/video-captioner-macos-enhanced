@@ -15,6 +15,9 @@
 !/requirements-macos-whisperx.txt
 !/requirements-common.txt
 !/requirements-windows.txt
+!/.github/
+!/.github/workflows/
+!/.github/workflows/build-windows.yml
 !/VideoCaptioner.bat
 !/app/
 !/app/**

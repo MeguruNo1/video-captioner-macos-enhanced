@@ -12,14 +12,14 @@ An enhanced fork of [WEIFENG2333/VideoCaptioner](https://github.com/WEIFENG2333/
 
 ## Distribution Plan and Status
 
-**Windows EXE distribution is planned; macOS users build the app themselves.**
+**Windows installers and portable ZIPs are built with GitHub Actions; macOS users build the app themselves.**
 
 | Platform | Distribution | Current status |
 | --- | --- | --- |
-| Windows | A packaged EXE is planned | Desktop source entry point restored; EXE packaging and native Windows acceptance testing remain incomplete. Use the source setup below for now. |
+| Windows x64 | Setup EXE and portable ZIP | A manual build workflow is available. Check the corresponding run, artifacts and `verification.json`; real-media transcription and CUDA acceptance require separate validation. |
 | macOS (Apple Silicon) | Install dependencies and build locally | Source setup, a local App launcher, and standalone App / DMG build scripts are available. |
 
-Future Windows EXE downloads will appear on this repository's [Releases page](https://github.com/MeguruNo1/video-captioner-macos-enhanced/releases). Dependencies and installation steps will be documented with that release. Historical macOS DMGs are no longer the primary installation path going forward.
+Download Windows build artifacts from this repository's [Actions page](https://github.com/MeguruNo1/video-captioner-macos-enhanced/actions). The workflow does not create a formal Release; future published releases will appear on the [Releases page](https://github.com/MeguruNo1/video-captioner-macos-enhanced/releases). Historical macOS DMGs are no longer the primary installation path going forward.
 
 This README documents this fork. The package of the same name on PyPI belongs to upstream and does not install these enhancements.
 
@@ -85,9 +85,31 @@ The script uses PyInstaller, included in the dependencies, and produces:
 
 The filename version comes from the script's `DEFAULT_VERSION`; it does not identify the latest published release. The bundle still requires system FFmpeg and does not include transcription models or user configuration. The script applies an ad-hoc signature; the app is not Apple-notarized.
 
-## Windows: Run From Source for Now
+## Windows: Packages and Source Setup
 
-Until the EXE is released, install **64-bit Python 3.12, Git and FFmpeg**, with `ffmpeg` and `ffprobe` on `PATH` (the executable search path). Run in PowerShell:
+### Packages
+
+In Actions, select **Build Windows installer → Run workflow** and enter a version such as `1.4.1`. Download the artifact after a successful run:
+
+- `VideoCaptioner-Windows-x64-vX.Y.Z-Setup.exe`: per-user installation, no administrator rights required, with a Start menu shortcut and uninstaller.
+- `VideoCaptioner-Windows-x64-vX.Y.Z.zip`: extract and launch `VideoCaptioner.exe` from the application directory.
+- `.sha256`, `build-dependencies.txt`, `verification.json` and a screenshot: checksums, resolved dependencies and installation/startup/uninstallation evidence for this run.
+
+Both packages include Python, CPU WhisperX dependencies and FFmpeg 7.1.1. They exclude models, user configuration and the Codex MCP service. Models download on first use. This CPU build does not provide CUDA acceleration and the installer is not code-signed. The version identifies the package; the workflow commit identifies its source.
+
+Authenticated GitHub CLI users can trigger Windows builds from a Mac:
+
+```sh
+gh workflow run build-windows.yml -R MeguruNo1/video-captioner-macos-enhanced -f version=1.4.1
+```
+
+`workflow run` triggers `workflow_dispatch`; `-R` (`--repo`) selects the repository and `-f` (`--raw-field`) supplies the version. Builds run only on manual dispatch; artifacts are retained for 3 days. Reusing a version does not imply identical packages: compare source commits and SHA-256 hashes.
+
+For local Windows builds, prepare `.venv` and FFmpeg/ffprobe under `resource/bin/windows`, then run `scripts/build_windows_release.ps1`. The Setup EXE additionally requires Inno Setup 6 and `scripts/build_windows_installer.ps1`. Outputs are under `dist/windows/release/`.
+
+### Source setup
+
+Install **64-bit Python 3.12, Git and FFmpeg**, with `ffmpeg` and `ffprobe` on `PATH` (the executable search path). Run in PowerShell:
 
 ```powershell
 git clone https://github.com/MeguruNo1/video-captioner-macos-enhanced.git
