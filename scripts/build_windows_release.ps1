@@ -50,6 +50,7 @@ $PyInstallerArguments = @(
     '--onedir'
     '--windowed'
     '--runtime-hook', (Join-Path $PSScriptRoot 'windows_runtime_hook.py')
+    '--copy-metadata', 'torchcodec'
     '--name', $AppName
     '--distpath', $PyInstallerDist
     '--workpath', $BuildRoot

@@ -61,6 +61,8 @@ bash "$PROJECT_ROOT/scripts/build_macos_app.sh" >/dev/null
     --add-binary "$(command -v ffprobe):resource/bin/macos-arm64" \
     --collect-all whisperx \
     --collect-all mlx_whisper \
+    --collect-all mlx \
+    --copy-metadata torchcodec \
     --hidden-import whisperx \
     --hidden-import mlx_whisper \
     --hidden-import torch \
