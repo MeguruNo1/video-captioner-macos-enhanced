@@ -1,10 +1,17 @@
 import sys
 import traceback
 import multiprocessing
+import os
 from pathlib import Path
+
+os.environ.setdefault("ORT_DISABLE_TELEMETRY", "1")
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
+    if getattr(sys, "frozen", False):
+        from app.core.utils.frozen_helpers import dispatch_frozen_helper
+        if dispatch_frozen_helper(sys.argv[1:]):
+            sys.exit(0)
 
 from PyQt5.QtCore import Qt, QTranslator
 from PyQt5.QtWidgets import QApplication
