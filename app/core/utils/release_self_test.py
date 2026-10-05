@@ -120,6 +120,9 @@ def _exercise(args: argparse.Namespace, report: dict) -> None:
     (args.output / "transcript.txt").write_text(text, encoding="utf-8")
     report["word_count"] = len(result.segments)
     report["checks"].append("Real speech transcription, forced word alignment, reference text and SRT export")
+    from app.core.utils.release_translation_test import verify_translation_protocol
+    report["translation_protocol"] = verify_translation_protocol(args.output)
+    report["checks"].append("Local mock translation HTTP protocol, SOCKS support and bilingual SRT export")
     from app.view.main_window import MainWindow
     window = MainWindow()
     window.show()
