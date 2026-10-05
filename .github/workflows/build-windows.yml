@@ -6,7 +6,7 @@ on:
       version:
         description: Package version (X.Y.Z)
         required: true
-        default: '1.4.1'
+        default: '0.1.3'
         type: string
 
 permissions:
@@ -82,12 +82,27 @@ jobs:
           ./scripts/build_windows_installer.ps1 -Version $env:PACKAGE_VERSION -CompilerPath $env:INNO_COMPILER
       - name: Verify installed application and uninstaller
         run: ./scripts/test_windows_package.ps1 -Version $env:PACKAGE_VERSION
+      - name: Test real speech in the packaged runtime
+        run: |
+          $audio = Join-Path $env:RUNNER_TEMP 'jfk.wav'
+          Invoke-WebRequest https://raw.githubusercontent.com/ggml-org/whisper.cpp/master/samples/jfk.wav -OutFile $audio
+          if ((Get-FileHash $audio -Algorithm SHA256).Hash.ToLowerInvariant() -ne '59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e') { throw 'Speech fixture checksum mismatch' }
+          $env:LOCALAPPDATA = Join-Path $env:RUNNER_TEMP 'functional-appdata'
+          $env:HF_HOME = Join-Path $env:RUNNER_TEMP 'hf'
+          $result = Join-Path $pwd 'dist/windows/release/functional'
+          $models = Join-Path $env:RUNNER_TEMP 'models'
+          $exe = Join-Path $pwd 'dist/windows/pyinstaller/VideoCaptioner/VideoCaptioner.exe'
+          $test = Start-Process $exe -ArgumentList @('--self-test', '--audio', $audio, '--output', $result, '--backend', 'whisperx', '--model', 'large-v3-turbo', '--model-dir', $models) -Wait -PassThru
+          Get-Content "$result/functional-test.log"
+          Get-Content "$result/functional-test.json"
+          if ($test.ExitCode -ne 0) { throw 'Packaged speech and subtitle functional test failed' }
       - name: Collect failure diagnostics
         if: failure()
         run: |
           New-Item -ItemType Directory dist/windows/diagnostics -Force | Out-Null
           if (Test-Path "$env:LOCALAPPDATA/VideoCaptioner/logs") { Copy-Item "$env:LOCALAPPDATA/VideoCaptioner/logs/*" dist/windows/diagnostics -Recurse }
           if (Test-Path dist/windows/release) { Copy-Item dist/windows/release/*.log dist/windows/diagnostics -ErrorAction SilentlyContinue }
+          if (Test-Path dist/windows/release/functional) { Copy-Item dist/windows/release/functional dist/windows/diagnostics -Recurse }
           Add-Type -AssemblyName System.Windows.Forms
           Add-Type -AssemblyName System.Drawing
           $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds

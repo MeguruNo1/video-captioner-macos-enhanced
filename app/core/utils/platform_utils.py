@@ -12,6 +12,9 @@ DEFAULT_COOKIE_BROWSER_LABEL = COOKIE_BROWSER_OPTIONS[0]
 
 
 def app_data_dir(app_name: str) -> Path:
+    override = os.environ.get("VIDEO_CAPTIONER_DATA_DIR")
+    if override:
+        return Path(override).expanduser().resolve()
     if IS_WINDOWS:
         return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / app_name
     if IS_MACOS:
@@ -35,7 +38,7 @@ def open_path(path: str | os.PathLike) -> bool:
     target = str(Path(path).expanduser().resolve())
     try:
         if IS_WINDOWS:
-            os.startfile(target)
+            getattr(os, "startfile")(target)
             return True
         return subprocess.run(["open" if IS_MACOS else "xdg-open", target], check=False).returncode == 0
     except Exception:

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 APP_NAME="VideoCaptioner"
-DEFAULT_VERSION="macos-enhanced-v0.1.2"
+DEFAULT_VERSION="macos-enhanced-v0.1.3"
 VERSION="${VIDEO_CAPTIONER_VERSION:-$DEFAULT_VERSION}"
 if [[ ! "$VERSION" =~ ^macos-enhanced-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
     echo "Invalid release version: $VERSION" >&2
@@ -57,6 +57,10 @@ bash "$PROJECT_ROOT/scripts/build_macos_app.sh" >/dev/null
     --osx-bundle-identifier "$BUNDLE_ID" \
     --add-data "$PROJECT_ROOT/resource/assets/logo.png:resource/assets" \
     --add-data "$PROJECT_ROOT/app/core/utils/acceleration.py:app/core/utils" \
+    --add-binary "$(command -v ffmpeg):resource/bin/macos-arm64" \
+    --add-binary "$(command -v ffprobe):resource/bin/macos-arm64" \
+    --collect-all whisperx \
+    --collect-all mlx_whisper \
     --hidden-import whisperx \
     --hidden-import mlx_whisper \
     --hidden-import torch \
@@ -100,11 +104,9 @@ VideoCaptioner macOS Enhanced
 
 Drag VideoCaptioner.app into Applications, then open it from Applications.
 
-This package bundles the Python application runtime and Python dependencies,
-but it does not bundle FFmpeg, yt-dlp external network requirements, or ASR
-models. Install FFmpeg with Homebrew before processing media:
-
-brew install ffmpeg
+This package bundles Python, Python dependencies, FFmpeg and ffprobe.
+ASR models are downloaded on first use. Network requirements of external
+services such as YouTube still apply.
 
 WhisperX and MLX Whisper models download on first use unless you already have
 compatible models under:

@@ -19,6 +19,7 @@ $AppDirectory = Join-Path $PyInstallerDist $AppName
 $ArchiveName = "$AppName-Windows-x64-v$Version.zip"
 $ArchivePath = Join-Path $ReleaseRoot $ArchiveName
 $ChecksumPath = "$ArchivePath.sha256"
+$env:PATH = "$WindowsBin;$env:PATH"
 
 foreach ($RequiredFile in @($Python, $PyInstaller, $Ffmpeg, $Ffprobe)) {
     if (-not (Test-Path -LiteralPath $RequiredFile -PathType Leaf)) {
@@ -48,6 +49,7 @@ $PyInstallerArguments = @(
     '--clean'
     '--onedir'
     '--windowed'
+    '--runtime-hook', (Join-Path $PSScriptRoot 'windows_runtime_hook.py')
     '--name', $AppName
     '--distpath', $PyInstallerDist
     '--workpath', $BuildRoot

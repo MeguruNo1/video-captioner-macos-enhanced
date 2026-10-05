@@ -9,6 +9,7 @@
 !/.gitignore
 !/README.md
 !/AGENTS.md
+!/LICENSE
 !/README.en.md
 !/README-macos-whisperx.md
 !/main.py

@@ -12,14 +12,14 @@ An enhanced fork of [WEIFENG2333/VideoCaptioner](https://github.com/WEIFENG2333/
 
 ## Distribution Plan and Status
 
-**Windows installers and portable ZIPs are built with GitHub Actions; macOS users build the app themselves.**
+**Windows installers and portable ZIPs are available; macOS (Apple Silicon) provides a standalone App / DMG and supports local builds.**
 
 | Platform | Distribution | Current status |
 | --- | --- | --- |
 | Windows x64 | Setup EXE and portable ZIP | A manual build workflow is available. Check the corresponding run, artifacts and `verification.json`; real-media transcription and CUDA acceptance require separate validation. |
-| macOS (Apple Silicon) | Install dependencies and build locally | Source setup, a local App launcher, and standalone App / DMG build scripts are available. |
+| macOS (Apple Silicon) | Standalone App / DMG or local builds | Includes Python, MLX / WhisperX dependencies and FFmpeg; see the Release notes for acceptance scope. |
 
-Download Windows build artifacts from this repository's [Actions page](https://github.com/MeguruNo1/video-captioner-macos-enhanced/actions). The workflow does not create a formal Release; future published releases will appear on the [Releases page](https://github.com/MeguruNo1/video-captioner-macos-enhanced/releases). Historical macOS DMGs are no longer the primary installation path going forward.
+Download installers for both platforms from the [Releases page](https://github.com/MeguruNo1/video-captioner-macos-enhanced/releases). Temporary Windows build artifacts are also available on the [Actions page](https://github.com/MeguruNo1/video-captioner-macos-enhanced/actions); the workflow does not automatically create a Release.
 
 This README documents this fork. The package of the same name on PyPI belongs to upstream and does not install these enhancements.
 
@@ -83,7 +83,7 @@ The script uses PyInstaller, included in the dependencies, and produces:
 - `dist/pyinstaller/VideoCaptioner.app`: Standalone application.
 - `dist/release/`: DMG image and SHA-256 checksum file.
 
-The filename version comes from the script's `DEFAULT_VERSION`; it does not identify the latest published release. The bundle still requires system FFmpeg and does not include transcription models or user configuration. The script applies an ad-hoc signature; the app is not Apple-notarized.
+The filename version comes from the script's `DEFAULT_VERSION`; it does not identify the latest published release. The bundle includes FFmpeg/ffprobe and excludes transcription models and user configuration. The script applies an ad-hoc signature; the app is not Apple-notarized.
 
 ## Windows: Packages and Source Setup
 

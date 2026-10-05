@@ -231,17 +231,17 @@ class WhisperXASR(BaseASR):
         self,
         audio_path: str,
         whisper_model: str = "large-v3",
-        language: str = "en",
+        language: str | None = "en",
         device: str = "cuda",
         compute_type: str = "float16",
         batch_size: int = 8,
-        hotwords: str = None,
-        initial_prompt: str = None,
+        hotwords: str | None = None,
+        initial_prompt: str | None = None,
         vad_method: str = "silero",
         vad_threshold: float = 0.5,
-        local_silero_dir: str = None,
+        local_silero_dir: str | None = None,
         align: bool = True,
-        model_dir: str = None,
+        model_dir: str | None = None,
         use_cache: bool = False,
         need_word_time_stamp: bool = False,
     ):
@@ -260,7 +260,7 @@ class WhisperXASR(BaseASR):
         self.model_dir = model_dir
         self.need_word_time_stamp = need_word_time_stamp
 
-    def _run(self, callback=None) -> dict:
+    def _run(self, callback=None, **kwargs: object) -> dict:
         if callback is None:
             callback = lambda x, y: None
 
@@ -296,9 +296,10 @@ class WhisperXASR(BaseASR):
             )
             if need_align:
                 callback(70, "Aligning with WhisperX")
-                align_model, metadata = self._load_align_model(
-                    whisperx, result.get("language") or self.language
-                )
+                language = result.get("language") or self.language
+                if not isinstance(language, str) or not language:
+                    raise RuntimeError("WhisperX did not identify a language for alignment")
+                align_model, metadata = self._load_align_model(whisperx, language)
                 result = call_with_punkt_tab_recovery(
                     lambda: whisperx.align(
                         result["segments"],
@@ -398,6 +399,8 @@ class WhisperXASR(BaseASR):
 
             output_lines = []
             noise_flags: set[str] = set()
+            if process.stdout is None:
+                raise RuntimeError("WhisperX subprocess stdout pipe is unavailable")
             while True:
                 line = process.stdout.readline()
                 if not line and process.poll() is not None:
@@ -538,7 +541,7 @@ class WhisperXASR(BaseASR):
         try:
             return _load_once(kwargs)
         except Exception as exc:
-            if _should_fallback_vad(exc, kwargs.get("vad_method")):
+            if _should_fallback_vad(exc, str(kwargs.get("vad_method") or "silero")):
                 logger.warning(
                     "WhisperX silero VAD load failed, retrying with pyannote VAD: %s",
                     exc,
@@ -550,7 +553,7 @@ class WhisperXASR(BaseASR):
             raise
 
     def _transcribe(self, model, audio):
-        kwargs = {"batch_size": self.batch_size}
+        kwargs: dict[str, int | str] = {"batch_size": self.batch_size}
         if self.language:
             kwargs["language"] = self.language
 
@@ -572,7 +575,7 @@ class WhisperXASR(BaseASR):
                 super().__init__(kwargs["vad_onset"])
                 self.vad_onset = kwargs["vad_onset"]
                 self.chunk_size = kwargs["chunk_size"]
-                self.vad_pipeline, vad_utils = torch.hub.load(
+                loaded = torch.hub.load(
                     repo_or_dir=local_repo_dir,
                     model="silero_vad",
                     source="local",
@@ -580,6 +583,11 @@ class WhisperXASR(BaseASR):
                     onnx=False,
                     trust_repo=True,
                 )
+                if not isinstance(loaded, tuple) or len(loaded) != 2:
+                    raise RuntimeError("Silero VAD did not return a model and utilities")
+                self.vad_pipeline, vad_utils = loaded
+                if not isinstance(vad_utils, (tuple, list)) or len(vad_utils) != 5:
+                    raise RuntimeError("Silero VAD utilities have an unexpected format")
                 (self.get_speech_timestamps, _, self.read_audio, _, _) = vad_utils
 
             def __call__(self, audio, **kwargs):
@@ -604,10 +612,10 @@ class WhisperXASR(BaseASR):
                 return audio
 
             @staticmethod
-            def merge_chunks(segments_list, chunk_size, onset=0.5, offset=None):
-                if len(segments_list) == 0:
+            def merge_chunks(segments, chunk_size, onset=0.5, offset=None):
+                if len(segments) == 0:
                     return []
-                return Vad.merge_chunks(segments_list, chunk_size, onset, offset)
+                return Vad.merge_chunks(segments, chunk_size, onset, offset)
 
         logger.info("Using local Silero VAD repository: %s", repo_dir)
         return LocalSileroVad(

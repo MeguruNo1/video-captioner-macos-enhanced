@@ -1,6 +1,10 @@
 import sys
 import traceback
+import multiprocessing
 from pathlib import Path
+
+if __name__ == "__main__":
+    multiprocessing.freeze_support()
 
 from PyQt5.QtCore import Qt, QTranslator
 from PyQt5.QtWidgets import QApplication
@@ -29,16 +33,16 @@ def main():
         QApplication.setHighDpiScaleFactorRoundingPolicy(
             Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
         )
-        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling)
+        QApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling)
     else:
         import os
 
         os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "0"
         os.environ["QT_SCALE_FACTOR"] = str(cfg.get(cfg.dpiScale))
-    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps)
+    QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps)
 
     app = QApplication(sys.argv)
-    app.setAttribute(Qt.AA_DontCreateNativeWidgetSiblings)
+    app.setAttribute(Qt.ApplicationAttribute.AA_DontCreateNativeWidgetSiblings)
 
     locale = cfg.get(cfg.language).value
     translator = FluentTranslator(locale)
@@ -56,4 +60,8 @@ def main():
 
 
 if __name__ == "__main__":
+    if "--self-test" in sys.argv:
+        from app.core.utils.release_self_test import run_self_test
+
+        sys.exit(run_self_test(sys.argv[1:]))
     sys.exit(main())

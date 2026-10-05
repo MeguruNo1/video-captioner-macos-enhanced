@@ -14,6 +14,8 @@ import threading
 import time
 from urllib.parse import urlparse
 from uuid import uuid4
+from typing import TypedDict
+
 
 import psutil
 
@@ -23,6 +25,11 @@ from .layout import ensure_job_layout
 from .settings import read_shared_settings, workflow_settings_snapshot, alignment_snapshot
 from .store import Store, DEFAULT_OUTPUT, atomic_json
 from .review import checkpoint, quality_status, reconcile_review, review_checks, review_counts, review_is_current
+
+
+class _SessionOptions(TypedDict, total=False):
+    start_new_session: bool
+
 
 PROJECT = Path(__file__).resolve().parents[2]
 ACTIVE = {"starting", "downloading", "extracting", "waiting_for_mlx", "waiting_for_asr", "transcribing", "retranscribing", "checking_transcript"}
@@ -246,12 +253,13 @@ class JobManager:
             log_path = self.store.root / "logs" / f"{state['job_id']}.log"
             log_path.parent.mkdir(parents=True, exist_ok=True)
             state["worker_log_path"] = str(log_path)
+        session_options: _SessionOptions = {"start_new_session": True} if os.name != "nt" else {}
         with log_path.open("ab") as log:
             process = subprocess.Popen([sys.executable, "-m", "app.mcp.worker", "--root", str(self.store.root),
                                         "--job", state["job_id"], "--token", token],
                                        cwd=PROJECT, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                                        creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS) if os.name == "nt" else 0,
-                                       start_new_session=os.name != "nt")
+                                       **session_options)
         state["worker"] = {"pid": process.pid, "created": psutil.Process(process.pid).create_time(), "token": token}
         # Reap children while this server is alive, without tying job lifetime to it.
         threading.Thread(target=process.wait, daemon=True).start()

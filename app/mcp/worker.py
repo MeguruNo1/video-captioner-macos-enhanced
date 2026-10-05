@@ -66,7 +66,7 @@ class Worker:
         elif backend == "whisperx":
             from app.core.bk_asr.whisper_x_auto import WhisperXASR
             from app.core.utils.platform_utils import app_data_dir
-            asr = WhisperXASR(str(path), whisper_model=options["model"], language=language,
+            asr = WhisperXASR(str(path), whisper_model=options["model"], language=language or None,
                               device=options["device"], compute_type=options["compute_type"],
                               batch_size=options.get("batch_size", 8), initial_prompt=initial_prompt,
                               hotwords=options.get("mlx_hotwords", ""),

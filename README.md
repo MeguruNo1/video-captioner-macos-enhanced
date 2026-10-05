@@ -12,14 +12,14 @@
 
 ## 发行计划与当前状态
 
-**Windows 通过 GitHub Actions 构建安装 EXE 和便携 ZIP；macOS 采用用户自行构建的方式。**
+**Windows 提供安装 EXE 和便携 ZIP；macOS（Apple Silicon）提供独立 App / DMG，也支持自行构建。**
 
 | 平台 | 发行方式 | 当前状态 |
 | --- | --- | --- |
 | Windows x64 | 安装 EXE 和便携 ZIP | 已提供手动构建工作流；以对应运行的结果、产物及 `verification.json` 为准，真实媒体转录和 CUDA 验收需另行完成 |
-| macOS（Apple Silicon） | 用户安装依赖后，自行构建 App | 已有源码运行、本地 App 启动器和独立 App / DMG 构建脚本 |
+| macOS（Apple Silicon） | 独立 App / DMG，或自行构建 | 包含 Python、MLX / WhisperX 依赖和 FFmpeg；发行验证范围以 Release 说明为准 |
 
-Windows 构建产物从本仓库的 [Actions 页面](https://github.com/MeguruNo1/video-captioner-macos-enhanced/actions)下载；工作流不会自动创建正式 Release。后续正式发行通过 [Releases 页面](https://github.com/MeguruNo1/video-captioner-macos-enhanced/releases)发布。历史 macOS DMG 不作为后续主要安装入口。
+两平台安装包通过 [Releases 页面](https://github.com/MeguruNo1/video-captioner-macos-enhanced/releases)发布。Windows 临时构建产物也可从 [Actions 页面](https://github.com/MeguruNo1/video-captioner-macos-enhanced/actions)下载；工作流不会自动创建 Release。
 
 本 README 面向本分支。PyPI 上的同名包属于上游，安装它不会获得这里的增强功能。
 
@@ -83,7 +83,7 @@ scripts/build_macos_release.sh
 - `dist/pyinstaller/VideoCaptioner.app`：独立应用。
 - `dist/release/`：DMG 安装镜像与 SHA-256 校验文件。
 
-文件名版本取自脚本的 `DEFAULT_VERSION`，不表示当前最新发行版本。产物仍需要系统 FFmpeg，且不内置转写模型或用户配置。脚本使用临时签名（ad-hoc），未进行 Apple 公证。
+文件名版本取自脚本的 `DEFAULT_VERSION`，不表示当前最新发行版本。产物包含 FFmpeg/ffprobe，不内置转写模型或用户配置。脚本使用临时签名（ad-hoc），未进行 Apple 公证。
 
 ## Windows：安装包与源码运行
 
