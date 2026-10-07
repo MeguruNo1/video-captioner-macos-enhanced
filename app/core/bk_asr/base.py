@@ -83,7 +83,6 @@ class BaseASR:
                             text=text,
                             start_time=int(float(start) * 1000),
                             end_time=int(float(end) * 1000),
-                            speaker=word.get("speaker") or segment.get("speaker") or "",
                         )
                     )
 
@@ -101,7 +100,6 @@ class BaseASR:
                     text=text,
                     start_time=int(float(start) * 1000),
                     end_time=int(float(end) * 1000),
-                    speaker=segment.get("speaker") or "",
                 )
             )
 

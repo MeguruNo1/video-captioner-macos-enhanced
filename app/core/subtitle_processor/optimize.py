@@ -314,7 +314,6 @@ class SubtitleOptimizer:
                 text=optimized_dict.get(str(i), seg.text),
                 start_time=seg.start_time,
                 end_time=seg.end_time,
-                speaker=seg.speaker,
             )
             for i, seg in enumerate(original_segments, 1)
         ]

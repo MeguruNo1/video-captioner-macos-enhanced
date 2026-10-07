@@ -3,7 +3,7 @@ import json
 import math
 import re
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
+from typing import List
 
 from app.core.utils.profanity_filter import mask_english_profanity
 from app.core.utils.subtitle_punctuation import normalize_cjk_quotes
@@ -18,11 +18,9 @@ class ASRDataSeg:
         start_time: int,
         end_time: int,
         translated_text: str = "",
-        speaker: str = "",
     ):
         self.text = text
         self.translated_text = translated_text
-        self.speaker = speaker
         self.start_time = start_time
         self.end_time = end_time
 
@@ -54,15 +52,6 @@ class ASRDataSeg:
 
     def __str__(self) -> str:
         return f"ASRDataSeg({self.text}, {self.start_time}, {self.end_time})"
-
-
-def merge_speakers(segments: Iterable[ASRDataSeg]) -> str:
-    speakers = {
-        seg.speaker.strip() for seg in segments if seg.speaker and seg.speaker.strip()
-    }
-    if len(speakers) == 1:
-        return speakers.pop()
-    return ""
 
 
 class ASRData:
@@ -288,7 +277,6 @@ class ASRData:
                         text=word,
                         start_time=current_time,
                         end_time=word_end_time,
-                        speaker=seg.speaker,
                     )
                 )
 
@@ -357,9 +345,9 @@ class ASRData:
             return
 
         if save_path.endswith(".srt"):
-            self.to_srt(save_path=save_path, layout=layout, include_speaker=True)
+            self.to_srt(save_path=save_path, layout=layout)
         elif save_path.endswith(".txt"):
-            self.to_txt(save_path=save_path, layout=layout, include_speaker=True)
+            self.to_txt(save_path=save_path, layout=layout)
         elif save_path.endswith(".json"):
             with open(save_path, "w", encoding="utf-8") as f:
                 json.dump(self.to_json(), f, ensure_ascii=False)
@@ -368,9 +356,9 @@ class ASRData:
 
     def _save_with_layout(self, save_path: str, layout: str) -> None:
         if save_path.endswith(".srt"):
-            self.to_srt(save_path=save_path, layout=layout, include_speaker=True)
+            self.to_srt(save_path=save_path, layout=layout)
         elif save_path.endswith(".txt"):
-            self.to_txt(save_path=save_path, layout=layout, include_speaker=True)
+            self.to_txt(save_path=save_path, layout=layout)
         elif save_path.endswith(".json"):
             with open(save_path, "w", encoding="utf-8") as f:
                 json.dump(self.to_json(), f, ensure_ascii=False)
@@ -393,46 +381,17 @@ class ASRData:
         if translated_path != target_path:
             self._save_with_layout(str(translated_path), "仅译文")
 
-    @staticmethod
-    def _speaker_prefix(speaker: str) -> str:
-        return f"[{speaker}] "
-
-    def _apply_speaker_label(
-        self,
-        seg: ASRDataSeg,
-        original: str,
-        translated: str,
-        last_speaker: Optional[str],
-    ) -> Tuple[str, str, Optional[str]]:
-        speaker = (seg.speaker or "").strip()
-        if not speaker or speaker == last_speaker:
-            return original, translated, last_speaker
-
-        prefix = self._speaker_prefix(speaker)
-        if original:
-            original = f"{prefix}{original}"
-        elif translated:
-            translated = f"{prefix}{translated}"
-
-        return original, translated, speaker
-
     def to_txt(
         self,
         save_path=None,
         layout: str = "原文在上",
-        include_speaker: bool = False,
     ) -> str:
         """Convert to plain text subtitle format (without timestamps)"""
         result = []
-        last_speaker = None
         for seg in self.segments:
             # 检查是否有换行符
             original = seg.text
             translated = seg.translated_text
-            if include_speaker:
-                original, translated, last_speaker = self._apply_speaker_label(
-                    seg, original, translated, last_speaker
-                )
 
             # 根据字幕类型组织文本
             if layout == "原文在上":
@@ -456,19 +415,13 @@ class ASRData:
         self,
         layout: str = "原文在上",
         save_path=None,
-        include_speaker: bool = False,
     ) -> str:
         """Convert to SRT subtitle format"""
         srt_lines = []
-        last_speaker = None
         for n, seg in enumerate(self.segments, 1):
             # 检查是否有换行符
             original = seg.text
             translated = seg.translated_text
-            if include_speaker:
-                original, translated, last_speaker = self._apply_speaker_label(
-                    seg, original, translated, last_speaker
-                )
 
             # 根据字幕类型组织文本
             if layout == "原文在上":
@@ -506,7 +459,6 @@ class ASRData:
                 "end_time": segment.end_time,
                 "original_subtitle": original,
                 "translated_subtitle": translated,
-                "speaker": segment.speaker,
             }
         return result_json
 
@@ -557,7 +509,6 @@ class ASRData:
             merged_text,
             merged_start_time,
             merged_end_time,
-            speaker=merge_speakers(self.segments[start_index : end_index + 1]),
         )
         # 替换 segments[start_index:end_index+1] 为 merged_seg
         self.segments[start_index : end_index + 1] = [merged_seg]
@@ -573,7 +524,6 @@ class ASRData:
             merged_text,
             current_seg.start_time,
             next_seg.end_time,
-            speaker=merge_speakers([current_seg, next_seg]),
         )
         self.segments[index] = merged_seg
         # 删除下一个段
@@ -661,7 +611,6 @@ class ASRData:
                 translated_text=segment_data["translated_subtitle"],
                 start_time=segment_data["start_time"],
                 end_time=segment_data["end_time"],
-                speaker=segment_data.get("speaker", ""),
             )
             segments.append(segment)
         return ASRData(segments)

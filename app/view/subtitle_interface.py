@@ -860,55 +860,22 @@ class SubtitleInterface(QWidget):
             else:
                 display_mode = "bilingual"
 
-        blocks = []
-        current_speaker = None
-        original_parts = []
-        translated_parts = []
+        original_text = cls._join_script_fragments(
+            [segment.get("original_subtitle", "") for segment in segments]
+        )
+        translated_text = cls._join_script_fragments(
+            [segment.get("translated_subtitle", "") for segment in segments]
+        )
+        if not has_translation or display_mode == "original":
+            return original_text
+        if display_mode == "translated":
+            return translated_text or original_text
 
-        for segment in segments:
-            speaker = (segment.get("speaker") or "").strip()
-            if current_speaker is None:
-                current_speaker = speaker
-            elif speaker != current_speaker:
-                blocks.append((current_speaker, original_parts, translated_parts))
-                original_parts = []
-                translated_parts = []
-                current_speaker = speaker
-
-            original_parts.append(segment.get("original_subtitle", ""))
-            translated_parts.append(segment.get("translated_subtitle", ""))
-
-        if original_parts or translated_parts:
-            blocks.append((current_speaker or "", original_parts, translated_parts))
-
-        paragraphs = []
-        for speaker, original_parts, translated_parts in blocks:
-            original_text = cls._join_script_fragments(original_parts)
-            translated_text = cls._join_script_fragments(translated_parts)
-            if not original_text and not translated_text:
-                continue
-
-            speaker_label = f"[{speaker}] " if speaker else ""
-            if not has_translation or display_mode == "original":
-                paragraphs.append(f"{speaker_label}{original_text}".strip())
-                continue
-            if display_mode == "translated":
-                paragraphs.append(
-                    f"{speaker_label}{translated_text or original_text}".strip()
-                )
-                continue
-
-            first_line = original_text
-            second_line = translated_text or original_text
-            if layout == "译文在上":
-                first_line, second_line = second_line, first_line
-
-            paragraph_lines = [f"{speaker_label}{first_line}".strip()]
-            if second_line:
-                paragraph_lines.append(second_line)
-            paragraphs.append("\n".join(paragraph_lines).strip())
-
-        return "\n\n".join(paragraphs).strip()
+        first_line = original_text
+        second_line = translated_text or original_text
+        if layout == "译文在上":
+            first_line, second_line = second_line, first_line
+        return "\n".join([first_line, second_line]).strip() if second_line else first_line
 
     def show_full_script_dialog(self):
         if not self.model._data:

@@ -89,9 +89,7 @@ class TranscriptThread(QThread):
             if self.task.need_next_task:
                 sidecar_path = output_path.with_name(f"{output_path.stem}.asr.json")
                 asr_data.save(save_path=str(sidecar_path))
-                asr_data.to_srt(save_path=str(output_path), include_speaker=False)
-            else:
-                asr_data.to_srt(save_path=str(output_path), include_speaker=True)
+            asr_data.to_srt(save_path=str(output_path))
             logger.info("字幕文件已保存到: %s", str(output_path))
 
             self.progress.emit(100, self.tr("转录完成"))

@@ -867,7 +867,6 @@ class OpenAITranslator(BaseTranslator):
                     "suggested_length": suggested_length,
                     "length_unit": budget.get("unit"),
                     "is_overlong": is_overlong,
-                    "speaker": seg.speaker,
                 }
             )
         return items
@@ -930,11 +929,7 @@ class OpenAITranslator(BaseTranslator):
     def _get_reflect_postprocess_user_content(
         chunk: List[Dict[str, Any]]
     ) -> str:
-        public_items = [
-            {key: value for key, value in item.items() if key != "speaker"}
-            for item in chunk
-        ]
-        return json.dumps(public_items, ensure_ascii=False)
+        return json.dumps(chunk, ensure_ascii=False)
 
     def _get_reflect_postprocess_cache(
         self, chunk: List[Dict[str, Any]]
@@ -1070,7 +1065,6 @@ class OpenAITranslator(BaseTranslator):
                         entry["start_time"],
                         entry["end_time"],
                         translated_text=entry["translated_subtitle"],
-                        speaker=source.get("speaker", ""),
                     )
                 )
         return segments
@@ -1083,7 +1077,6 @@ class OpenAITranslator(BaseTranslator):
                 int(item["start_time"]),
                 int(item["end_time"]),
                 translated_text=item["translated_subtitle"],
-                speaker=item.get("speaker", ""),
             )
             for item in chunk
         ]

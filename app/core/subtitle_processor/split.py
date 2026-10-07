@@ -12,7 +12,7 @@ from concurrent.futures import as_completed
 from openai import OpenAI
 
 from app.config import CACHE_PATH
-from app.core.bk_asr.asr_data import ASRData, ASRDataSeg, merge_speakers
+from app.core.bk_asr.asr_data import ASRData, ASRDataSeg
 from app.core.storage.cache_manager import CacheManager
 from app.core.subtitle_processor.prompt import (
     PROMPT_SPLIT_SEMANTIC,
@@ -1099,7 +1099,6 @@ class SubtitleSplitter:
                     merged_text.strip(),
                     current_segments[0].start_time,
                     current_segments[-1].end_time,
-                    speaker=merge_speakers(current_segments),
                 )
                 result_segs.append(merged_seg)
                 continue
@@ -1405,7 +1404,6 @@ class SubtitleSplitter:
                 else:
                     current_seg.text += " " + next_seg.text  # 加空格连接
                 current_seg.end_time = next_seg.end_time
-                current_seg.speaker = merge_speakers([current_seg, next_seg])
 
                 # 从列表中移除下一个段落
                 segments.pop(i + 1)
@@ -1527,7 +1525,6 @@ class SubtitleSplitter:
                         merged_text,
                         merged_start_time,
                         merged_end_time,
-                        speaker=merge_speakers(group),
                     )
 
                     logger.debug(f"合并分段: {merged_seg.text}")
