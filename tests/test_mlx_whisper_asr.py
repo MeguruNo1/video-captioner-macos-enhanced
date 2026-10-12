@@ -1,5 +1,6 @@
 import unittest
 import types
+import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -61,6 +62,7 @@ class MLXWhisperASRTests(unittest.TestCase):
             word_timestamps=True,
             initial_prompt="请优先识别：VideoCaptioner, MLX Whisper",
             condition_on_previous_text=False,
+            no_speech_threshold=0.6,
         )
 
     def test_run_rejects_missing_local_model_before_import(self):
@@ -96,7 +98,19 @@ class MLXWhisperASRTests(unittest.TestCase):
                     word_timestamps=True,
                     initial_prompt=None,
                     condition_on_previous_text=False,
+                    no_speech_threshold=0.6,
                 )
+
+    def test_explicit_silence_skip_override_reaches_decoder_and_has_distinct_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            audio = Path(directory) / "clip.wav"
+            audio.write_bytes(b"audio")
+            default = MLXWhisperASR(str(audio))
+            recovery = MLXWhisperASR(str(audio), no_speech_threshold=None)
+            mocked_transcribe = Mock(return_value={"segments": []})
+            recovery._transcribe_once(types.SimpleNamespace(transcribe=mocked_transcribe), str(audio))
+            self.assertIsNone(mocked_transcribe.call_args.kwargs["no_speech_threshold"])
+            self.assertNotEqual(default._get_key(), recovery._get_key())
 
     def test_word_timestamps_use_whisperx_forced_alignment(self):
         asr = MLXWhisperASR(

@@ -113,9 +113,10 @@ def realign_job(job_id: str, revision: int) -> dict:
 
 
 @mcp.tool()
-def retranscribe_range(job_id: str, start_word_id: str, end_word_id: str, revision: int, initial_prompt: str = "") -> dict:
-    """Start local re-transcription with the saved backend/device; expands to complete affected batches. Replaces their word IDs, invalidates their translations, and retains other completed batches. Fetch new batch IDs afterwards."""
-    return manager.retranscribe_range(job_id, start_word_id, end_word_id, revision, initial_prompt)
+def retranscribe_range(job_id: str, start_word_id: str, end_word_id: str, revision: int,
+                       initial_prompt: str = "", disable_vad: bool = False, normalize_audio: bool = False) -> dict:
+    """Start local re-transcription with the saved backend/device; expands to complete affected batches. disable_vad=true bypasses MLX VAD and decoder silence skipping for this clip only, retaining the task snapshot and acoustic alignment; unsupported backends fail. normalize_audio=true normalizes only the temporary clip for quiet speech; source audio and task settings remain intact. Replaces affected word IDs/translations and retains other completed batches. Fetch new batch IDs afterwards."""
+    return manager.retranscribe_range(job_id, start_word_id, end_word_id, revision, initial_prompt, disable_vad, normalize_audio)
 
 
 @mcp.tool()

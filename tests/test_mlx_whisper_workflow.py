@@ -213,3 +213,31 @@ class MLXWhisperWorkflowTests(unittest.TestCase):
             [segment["text"] for segment in merged["segments"]],
             ["very", "very"],
         )
+
+
+def test_normalized_chunk_preserves_samples_and_amplifies_quiet_audio(tmp_path):
+    import math
+    import struct
+    import wave
+    from app.core.bk_asr.mlx_workflow import extract_audio_chunk
+
+    rate = 16000
+    source = tmp_path / 'quiet.wav'
+    samples = [int(500 * math.sin(2 * math.pi * 440 * i / rate)) for i in range(rate * 4)]
+    with wave.open(str(source), 'wb') as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(rate)
+        handle.writeframes(struct.pack(f'<{len(samples)}h', *samples))
+    plain = extract_audio_chunk(source, tmp_path / 'plain.wav', 0, 4)
+    normalized = extract_audio_chunk(source, tmp_path / 'normalized.wav', 0, 4, normalize_audio=True)
+    def read(path):
+        with wave.open(str(path), 'rb') as handle:
+            count = handle.getnframes()
+            assert handle.getframerate() == rate
+            return count, struct.unpack(f'<{count}h', handle.readframes(count))
+    plain_count, plain_samples = read(plain)
+    normalized_count, normalized_samples = read(normalized)
+    assert plain_count == normalized_count == rate * 4
+    assert sum(s*s for s in normalized_samples) > 4 * sum(s*s for s in plain_samples)
+    assert max(abs(s) for s in normalized_samples) < 32767

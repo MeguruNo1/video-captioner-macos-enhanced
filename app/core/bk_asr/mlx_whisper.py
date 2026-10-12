@@ -68,6 +68,7 @@ class MLXWhisperASR(BaseASR):
         align_model_dir: str | None = None,
         alignment_method: str = "whisperx",
         align_inherit_proxy_environment: bool = False,
+        no_speech_threshold: float | None = 0.6,
     ):
         if alignment_method not in {"whisperx", "native"}:
             raise ValueError("alignment_method must be whisperx or native")
@@ -84,6 +85,7 @@ class MLXWhisperASR(BaseASR):
         self.chunk_overlap = max(0, int(chunk_overlap or 0))
         self.align_device = align_device or "cpu"
         self.align_model_dir = align_model_dir
+        self.no_speech_threshold = no_speech_threshold
 
     def _transcribe_once(self, mlx_whisper, audio_path: str | Path) -> dict:
         if isinstance(audio_path, Path):
@@ -100,6 +102,7 @@ class MLXWhisperASR(BaseASR):
             # History can suppress whole sentences in mixed-language clips.
             # Keep ASR decoding independent of the downstream timestamp backend.
             condition_on_previous_text=False,
+            no_speech_threshold=self.no_speech_threshold,
         )
 
     def _build_workflow_windows(
@@ -223,6 +226,7 @@ class MLXWhisperASR(BaseASR):
                 str(self.vad_threshold),
                 str(self.chunk_duration),
                 str(self.chunk_overlap),
+                str(self.no_speech_threshold),
                 self.alignment_method,
                 self.align_device,
                 str(self.align_model_dir),

@@ -276,6 +276,7 @@ def extract_audio_chunk(
     output_path: str | Path,
     start_seconds: float,
     end_seconds: float,
+    normalize_audio: bool = False,
 ) -> Path:
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -294,8 +295,10 @@ def extract_audio_chunk(
         "-ar",
         str(MLX_SAMPLE_RATE),
         "-vn",
-        str(output),
     ]
+    if normalize_audio:
+        command.extend(["-af", "dynaudnorm=f=150:g=15:p=0.9:m=10"])
+    command.append(str(output))
     subprocess.run(command, check=True, capture_output=True)
     return output
 

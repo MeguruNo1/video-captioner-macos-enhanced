@@ -303,7 +303,9 @@ def test_invalid_asr_is_not_silently_replaced_by_guessed_timestamps(result):
     with pytest.raises(ValueError): words_from_result(result)
 
 
-def test_retranscribe_replaces_only_affected_batches(job, monkeypatch):
+@pytest.mark.parametrize("disable_vad", [False, True])
+@pytest.mark.parametrize("normalize_audio", [False, True])
+def test_retranscribe_replaces_only_affected_batches(job, monkeypatch, disable_vad, normalize_audio):
     manager, job_id = job
     with manager.store.edit(job_id) as state:
         state["batches"] = make_batches(state["words"][:2]) + make_batches(state["words"][2:])
@@ -313,18 +315,48 @@ def test_retranscribe_replaces_only_affected_batches(job, monkeypatch):
         manager.submit_caption_batch(job_id, b["id"], batch["revision"], payload(batch))
     monkeypatch.setattr(manager, "_spawn", lambda state: state.update(worker={"token": "test"}))
     state = manager.store.read(job_id)
-    manager.retranscribe_range(job_id, "w000000", "w000001", state["revision"])
+    options = {"backend": "mlx", "vad_enabled": True}
+    with manager.store.edit(job_id) as saved:
+        saved["options"].update(options)
+    manager.retranscribe_range(job_id, "w000000", "w000001", state["revision"], disable_vad=disable_vad, normalize_audio=normalize_audio)
     state = manager.store.read(job_id)
+    assert state["retranscribe"]["disable_vad"] is disable_vad
+    assert state["retranscribe"]["normalize_audio"] is normalize_audio
     worker = Worker(manager.store.root, job_id, "test")
-    monkeypatch.setattr(worker, "transcribe", lambda *args: {"segments": [{"words": [{"word": "Hi!", "start": .1, "end": .8}]}]})
-    monkeypatch.setattr("app.core.bk_asr.mlx_workflow.extract_audio_chunk", lambda *args: Path("unused.wav"))
-    worker.retranscribe(state, Path(state["directory"]), Path("unused.wav"), {})
+    transcribe = Mock(return_value={"segments": [{"words": [{"word": "Hi!", "start": .1, "end": .8}]}]})
+    monkeypatch.setattr(worker, "transcribe", transcribe)
+    extract = Mock(return_value=Path("unused.wav"))
+    monkeypatch.setattr("app.core.bk_asr.mlx_workflow.extract_audio_chunk", extract)
+    worker.retranscribe(state, Path(state["directory"]), Path("unused.wav"), options)
+    assert extract.call_args.kwargs == ({"normalize_audio": True} if normalize_audio else {})
+    assert transcribe.call_args.args[1]["vad_enabled"] is (not disable_vad)
+    assert transcribe.call_args.args[1].get("mlx_no_speech_threshold", 0.6) == (None if disable_vad else 0.6)
+    if disable_vad and normalize_audio:
+        assert transcribe.call_args.args[1]["chunk_duration"] == 20
+        assert transcribe.call_args.args[1]["chunk_overlap"] == 2
+    else:
+        assert "chunk_duration" not in transcribe.call_args.args[1]
     updated = manager.store.read(job_id)
     assert updated["words"][0]["id"] != "w000000"
     assert updated["words"][1:] == original["words"][2:]
     assert updated["batches"][0]["captions"] is None
     assert updated["batches"][1]["captions"] is not None
+    assert updated["batches"][1] == state["batches"][1]
+    assert updated["options"] == state["options"]
     assert updated["revision"] == state["revision"] + 1
+
+
+def test_retranscribe_vad_override_rejects_unsupported_backend_without_mutation(job, monkeypatch):
+    manager, job_id = job
+    with manager.store.edit(job_id) as state:
+        state["options"]["backend"] = "whisperx"
+    before = manager.store.read(job_id)
+    spawn = Mock()
+    monkeypatch.setattr(manager, "_spawn", spawn)
+    with pytest.raises(ValueError, match="only supported for MLX"):
+        manager.retranscribe_range(job_id, "w000000", "w000001", before["revision"], disable_vad=True)
+    assert manager.store.read(job_id) == before
+    spawn.assert_not_called()
 
 
 def test_native_mlx_no_whisperx_and_distinct_cache(tmp_path):

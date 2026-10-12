@@ -62,7 +62,8 @@ class Worker:
                                vad_enabled=options["vad_enabled"],
                                vad_threshold=options.get("vad_threshold", 0.5),
                                chunk_duration=options.get("chunk_duration", 600),
-                               chunk_overlap=options.get("chunk_overlap", 30))
+                               chunk_overlap=options.get("chunk_overlap", 30),
+                               no_speech_threshold=options.get("mlx_no_speech_threshold", 0.6))
         elif backend == "whisperx":
             from app.core.bk_asr.whisper_x_auto import WhisperXASR
             from app.core.utils.platform_utils import app_data_dir
@@ -245,6 +246,9 @@ class Worker:
         from app.core.bk_asr.mlx_workflow import extract_audio_chunk
         self.stage("retranscribing", message="Retranscribing complete affected caption batches")
         request = state["retranscribe"]
+        disable_vad = request.get("disable_vad", False)
+        if disable_vad and options.get("backend", "mlx") != "mlx":
+            raise ValueError("disable_vad is only supported for MLX local re-transcription")
         affected = [b for b in state["batches"] if b["id"] in request["batch_ids"]]
         words = state["words"]
         ids = [word["id"] for word in words]
@@ -260,7 +264,10 @@ class Worker:
         context_start = max(0, start - 2)
         context_end = min(state["duration_ms"] / 1000, end + 2)
         run_id = uuid4().hex
-        chunk = extract_audio_chunk(audio, directory / f"retranscribe-{run_id}.wav", context_start, context_end)
+        normalize_audio = request.get("normalize_audio", False)
+        chunk_path = directory / f"retranscribe-{run_id}.wav"
+        chunk = (extract_audio_chunk(audio, chunk_path, context_start, context_end, normalize_audio=True)
+                 if normalize_audio else extract_audio_chunk(audio, chunk_path, context_start, context_end))
         # Repeating the same VAD windows can reproduce identical collapsed timing.
         # Keep this bounded clip continuous, without changing the saved job options.
         repair_timing = (
@@ -268,15 +275,28 @@ class Worker:
             and options.get("vad_enabled", False)
             and has_collapsed_word_run(words[first:last+1])
         )
-        effective_options = dict(options, vad_enabled=False) if repair_timing else options
-        strategy = "mlx_continuous_audio" if repair_timing else "saved_settings"
-        if repair_timing:
-            self.stage("retranscribing", message="Repairing collapsed MLX timing with VAD disabled for this clip")
+        continuous_audio = disable_vad or repair_timing
+        # Explicit speech-recovery clips also bypass Whisper's silence skip.
+        # Automatic collapsed-timing repairs keep the decoder defaults.
+        effective_options = (dict(options, vad_enabled=False, mlx_no_speech_threshold=None) if disable_vad
+                             else dict(options, vad_enabled=False) if repair_timing else options)
+        if disable_vad and normalize_audio:
+            # Short independent windows prevent louder neighboring narration from
+            # suppressing quiet broadcast speech in a continuous decoder window.
+            effective_options = dict(effective_options, chunk_duration=20, chunk_overlap=2)
+        strategy = "mlx_continuous_audio" if continuous_audio else "saved_settings"
+        if continuous_audio:
+            self.stage("retranscribing", message="Transcribing continuous MLX audio with VAD disabled for this clip")
         result = self.transcribe(chunk, effective_options, request.get("initial_prompt") or None)
         atomic_json(directory / f"transcript-{run_id}.json", {
             "start_seconds": start, "end_seconds": end, "strategy": strategy,
             "context_start_seconds": context_start, "context_end_seconds": context_end,
             "vad_enabled": effective_options.get("vad_enabled"), "result": result,
+            "disable_vad_requested": disable_vad,
+            "normalize_audio": normalize_audio,
+            "chunk_duration": effective_options.get("chunk_duration", 600),
+            "chunk_overlap": effective_options.get("chunk_overlap", 30),
+            "no_speech_threshold": effective_options.get("mlx_no_speech_threshold", 0.6),
         })
         from .retranscription import select_splice_words
         try:
@@ -288,7 +308,7 @@ class Worker:
         except ValueError as exc:
             raise ValueError(f"{exc}; original captions retained. Select a wider word range. "
                              f"Diagnostic: transcript-{run_id}.json") from exc
-        if repair_timing and has_collapsed_word_run(replacement):
+        if continuous_audio and has_collapsed_word_run(replacement):
             raise ValueError("MLX timing repair still contains consecutive zero-duration words; "
                              f"original captions retained. Diagnostic: transcript-{run_id}.json")
         replacement_batches = make_batches(replacement, options.get("caption_batch_policy"))

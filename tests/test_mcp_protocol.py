@@ -27,6 +27,11 @@ def test_stdio_initialization_tools_and_readiness(tmp_path):
                                  "get_review_issues", "review_issue", "get_review_clip", "set_generated_cover", "export_job", "cancel_job", "resume_job"}
                 schema = next(t.inputSchema for t in listing.tools if t.name == "submit_caption_batch")
                 assert "captions" in schema["properties"]
+                retranscribe_schema = next(t.inputSchema for t in listing.tools if t.name == "retranscribe_range")
+                assert retranscribe_schema["properties"]["disable_vad"]["type"] == "boolean"
+                assert retranscribe_schema["properties"]["disable_vad"]["default"] is False
+                assert retranscribe_schema["properties"]["normalize_audio"]["type"] == "boolean"
+                assert retranscribe_schema["properties"]["normalize_audio"]["default"] is False
                 check = await session.call_tool("check_environment", {"model": "/missing/local/model"})
                 assert not check.isError
                 assert "not cached" in str(check.content)

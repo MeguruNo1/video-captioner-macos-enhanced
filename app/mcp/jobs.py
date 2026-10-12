@@ -546,18 +546,21 @@ class JobManager:
             self._spawn(state)
         return self.get_job(job_id)
 
-    def retranscribe_range(self, job_id, start_word_id, end_word_id, revision, initial_prompt=""):
+    def retranscribe_range(self, job_id, start_word_id, end_word_id, revision, initial_prompt="", disable_vad: bool = False, normalize_audio: bool = False):
         with self.store.edit(job_id) as state:
             self._editable(state)
             if revision != state["revision"]:
                 raise ValueError("Stale revision; fetch this batch again")
+            if disable_vad and state["options"].get("backend", "mlx") != "mlx":
+                raise ValueError("disable_vad is only supported for MLX local re-transcription")
             ids = [word["id"] for word in state["words"]]
             first, last = ids.index(start_word_id), ids.index(end_word_id)
             if first > last:
                 raise ValueError("Word range is reversed")
             affected = [b for b in state["batches"] if ids.index(b["start_word_id"]) <= last and ids.index(b["end_word_id"]) >= first]
             # Expand to complete batches, so unaffected translations remain valid.
-            state["retranscribe"] = {"batch_ids": [b["id"] for b in affected], "initial_prompt": initial_prompt}
+            state["retranscribe"] = {"batch_ids": [b["id"] for b in affected], "initial_prompt": initial_prompt,
+                                     "disable_vad": disable_vad, "normalize_audio": normalize_audio}
             self._spawn(state)
         return self.get_job(job_id)
 
