@@ -652,12 +652,23 @@ class JobManager:
                 temporary.replace(directory / name)
             atomic_json(flow / "captions.json", {"revision": state["revision"], "captions": captions, "glossary": state["glossary"]})
             source_video = Path(state["video_path"])
-            video_name = f"「{title}」{source_video.suffix.lower()}"
+            video_name = f"「{title}」.mp4"
             final_video = directory / video_name
             if source_video.resolve() != final_video.resolve():
-                temporary_video = directory / f".{video_name}.tmp"
-                shutil.copy2(source_video, temporary_video)
-                temporary_video.replace(final_video)
+                temporary_video = directory / f".{title}.exporting.mp4"
+                try:
+                    if source_video.suffix.lower() == ".mp4":
+                        shutil.copy2(source_video, temporary_video)
+                    else:
+                        from app.core.utils.video_utils import normalize_video_to_mp4
+                        normalize_video_to_mp4(
+                            str(source_video), str(temporary_video),
+                            force_hevc_for_codecs={"av1", "vp9"},
+                            encoder_preference=state["options"].get("hevc_encoder", "auto"),
+                        )
+                    temporary_video.replace(final_video)
+                finally:
+                    temporary_video.unlink(missing_ok=True)
             from PIL import Image
             cover_files = {"原封面.png": Path(state["thumbnail_path"]),
                            "生成封面.png": Path(state["generated_cover_path"])}

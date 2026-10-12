@@ -871,3 +871,58 @@ def test_transcript_preflight_groups_adjacent_low_confidence(job):
     assert issue['start_ms'] == 0 and issue['end_ms'] == 900
     state['words'][0]['alignment_score'] = .9
     assert validate(state, phase='transcript')['issues'][0]['id'] != issue['id']
+
+
+def test_export_normalizes_real_mkv_to_mp4_without_changing_captions(job):
+    manager, job_id = job
+    state = manager.store.read(job_id)
+    source = Path(state['video_path']).with_suffix('.mkv')
+    subprocess.run([
+        'ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=128x72:rate=10',
+        '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000', '-t', '2.1',
+        '-c:v', 'libx264', '-c:a', 'libopus', '-y', str(source),
+    ], check=True, capture_output=True)
+    original_bytes = source.read_bytes()
+    with manager.store.edit(job_id) as state:
+        state['video_path'] = str(source)
+    batch = manager.get_caption_batch(job_id)
+    manager.submit_caption_batch(job_id, batch['batch_id'], batch['revision'], payload(batch))
+    before = manager.store.read(job_id)
+    result = manager.export_job(job_id)
+    target = Path(result['artifacts']['video'])
+    assert result['exported'] and target.suffix == '.mp4'
+    probe = json.loads(subprocess.check_output([
+        'ffprobe', '-v', 'error', '-show_streams', '-show_format', '-of', 'json', str(target)
+    ], text=True))
+    assert 'mp4' in probe['format']['format_name'].split(',')
+    assert [s['codec_name'] for s in probe['streams']] == ['h264', 'aac']
+    assert abs(float(probe['format']['duration']) - 2.1) < .1
+    after = manager.store.read(job_id)
+    assert after['batches'] == before['batches']
+    assert after['words'] == before['words']
+    assert after['options'] == before['options']
+    assert Path(after['video_path']).read_bytes() == original_bytes
+
+
+def test_failed_mp4_normalization_retains_previous_export(job, monkeypatch):
+    manager, job_id = job
+    batch = manager.get_caption_batch(job_id)
+    manager.submit_caption_batch(job_id, batch['batch_id'], batch['revision'], payload(batch))
+    previous = manager.export_job(job_id)
+    target = Path(previous['artifacts']['video'])
+    original_bytes = target.read_bytes()
+    source = target.parent.parent / 'flow' / 'source.mkv'
+    source.write_bytes(b'original source')
+    with manager.store.edit(job_id) as state:
+        state['video_path'] = str(source)
+    before = manager.store.read(job_id)
+    def fail(_source, temporary, **_kwargs):
+        Path(temporary).write_bytes(b'incomplete')
+        raise RuntimeError('normalization failed')
+    monkeypatch.setattr('app.core.utils.video_utils.normalize_video_to_mp4', fail)
+    with pytest.raises(RuntimeError, match='normalization failed'):
+        manager.export_job(job_id)
+    assert target.read_bytes() == original_bytes
+    assert source.read_bytes() == b'original source'
+    assert manager.store.read(job_id) == before
+    assert not list(target.parent.glob('*.exporting.mp4'))
